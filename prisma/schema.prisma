@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model GestorUser {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  senha     String
+  nome      String
+  criadoEm DateTime @default(now())
+}
+
+model ProfessorPercentual {
+  id             Int      @id @default(autoincrement())
+  idProfessorEvo String
+  nomeProfessor  String
+  percentual     Float    @default(20)
+  piso           Float    @default(55)
+  teto           Float    @default(90)
+  dataInicio     DateTime @default(now())
+  criadoEm       DateTime @default(now())
+
+  @@index([idProfessorEvo, dataInicio])
+}
+
+model RelatorioStatus {
+  id             Int      @id @default(autoincrement())
+  idProfessorEvo String
+  nomeProfessor  String
+  mes            Int
+  ano            Int
+  status         String   @default("Gerado")
+  versao         Int      @default(1)
+  geradoEm       DateTime @default(now())
+  atualizadoEm   DateTime @updatedAt
+  observacao     String?
+
+  @@unique([idProfessorEvo, mes, ano])
+}
+
+model AcademiaConfig {
+  id           Int      @id @default(autoincrement())
+  nomeAcademia String   @default("Academia")
+  logoBase64   String?
+  atualizadoEm DateTime @updatedAt
+}
