@@ -232,27 +232,10 @@ export async function GET(req: NextRequest) {
                         if (tipo === "fixo") {
                             valorMes = round2(valorMes * 0.97);
                         }
-                        // Refinamento de Reposição Analítico vs Nativo
-                        let isFixoEmReposicao = false;
-                        if (tipo === "fixo") {
-                            const nameMasks = m.nameMembership ? m.nameMembership.toUpperCase() : "";
-                            const diaAulaNum = dataAula.getDay();
-                            const startTimeMask = aula.startTime.substring(0, 5); // ex: "14:00"
-
-                            // A NOVA MATRIZ MESTRE DE FREQUÊNCIA: Grade da EVO oficial!
-                            const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
-
-                            // Verifica se na grade nativa da EVO há agendamento para hoje e nesse horário
-                            // O "weekDay" da EVO usa o mesmo número sequencial de data.getDay() JS: (0-DOM, 6-SAB)
-                            const ehOficialmenteDela = agendaAluna.some(ag => ag.weekDay === diaAulaNum && ag.startTime.startsWith(startTimeMask));
-
-                            if (!ehOficialmenteDela) {
-                                isFixoEmReposicao = true;
-                            } else if (isEvoReplacement === true) {
-                                // Fallback: se for turma dela mas a academia anotou explicitamente o selo Reposicao
-                                isFixoEmReposicao = true;
-                            }
-                        }
+                        // Reposição: confia no campo "replacement" nativo da EVO, que é historicamente correto.
+                        // Usar a grade fixa ATUAL (getMemberFixedSchedules) era problemático: quando uma aluna
+                        // troca de horário, suas presenças no horário ANTIGO eram erroneamente marcadas como reposição.
+                        const isFixoEmReposicao = tipo === "fixo" && isEvoReplacement === true;
 
                         // Alunas Free rendem R$ 11. Fixas em Reposição rendem R$ 0. Fixas Agendadas dividem mensalidade.
                         let contrib = 0;
