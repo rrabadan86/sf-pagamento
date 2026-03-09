@@ -23,17 +23,19 @@ export async function getTurmaEnrollments(idActivitySession: number): Promise<Ev
 export interface EvoFixedSchedule {
     idActivity: number;
     activityName: string;
-    weekDay: number;      // 0 = Domingo, 1 = Segunda, 2 = Terça...
-    startTime: string;    // Ex: "14:00:00"
-    status: number;       // 1 = Ativo
+    weekDay: number;       // 0 = Domingo, 1 = Segunda, 2 = Terça...
+    startTime: string;     // Ex: "14:00:00"
+    status: number;        // 1 = Ativo, 2 = Removido
+    startDate: string;     // Ex: "2026-01-18T00:00:00" — data em que a matrícula começou
+    endDate: string | null; // null se ainda ativa; preenchida quando removida
 }
 
 export async function getMemberFixedSchedules(idMember: number): Promise<EvoFixedSchedule[]> {
     try {
-        // As turmas que um aluno se vinculou recorrentemente (Fixas)
+        // Busca TODAS as matrículas (ativas e removidas) para verificação histórica por data
         const res = await evoFetch<any>("/api/v1/activities/enrollment/member-enrollment", {
-            idMember,
-            status: 1
+            idMember
+            // Sem filtro de status: retorna status 1 (ativo) e 2 (removido)
         });
         if (Array.isArray(res)) return res as EvoFixedSchedule[];
         return [];

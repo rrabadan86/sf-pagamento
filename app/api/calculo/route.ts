@@ -232,17 +232,29 @@ export async function GET(req: NextRequest) {
                         if (tipo === "fixo") {
                             valorMes = round2(valorMes * 0.97);
                         }
-                        // Reposição: verifica se a aluna tem horário fixo nessa turma
+                        // Reposição: verifica se a aluna tinha matrícula FIXA VIGENTE nessa data, dia e horário
                         let isFixoEmReposicao = false;
                         if (tipo === "fixo") {
                             const diaAulaNum = dataAula.getDay();
                             const startTimeMask = aula.startTime.substring(0, 5); // ex: "08:30"
+                            const dataAulaTs = dataAula.getTime();
 
-                            // Grade fixa atual da aluna na EVO
+                            // Grade de matrículas históricas (ativas + removidas)
                             const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
 
-                            // Verifica se há agendamento para esse dia e horário
-                            const ehOficialmenteDela = agendaAluna.some(ag => ag.weekDay === diaAulaNum && ag.startTime.startsWith(startTimeMask));
+                            // Verifica se havia uma matrícula fixa vigente NA DATA DA AULA para esse dia/horário
+                            // Isso resolve o caso de alunas que trocaram de horário no mês:
+                            //   - Antes da troca: matrícula antiga ainda estava ativa → não é reposição ✅
+                            //   - Depois da troca: nova matrícula está ativa → não é reposição ✅
+                            //   - Fazendo make-up: nenhuma matrícula vigente para esse horário → é reposição ✅
+                            const ehOficialmenteDela = agendaAluna.some(ag => {
+                                if (ag.weekDay !== diaAulaNum) return false;
+                                if (!ag.startTime.startsWith(startTimeMask)) return false;
+                                // Verifica se a matrícula estava ativa na data da aula
+                                const inicio = new Date(ag.startDate).getTime();
+                                const fim = ag.endDate ? new Date(ag.endDate).getTime() : Infinity;
+                                return dataAulaTs >= inicio && dataAulaTs <= fim;
+                            });
 
                             if (!ehOficialmenteDela) {
                                 isFixoEmReposicao = true;
