@@ -108,23 +108,29 @@ export async function getMemberMemberships(
     const mesStr = String(mes).padStart(2, "0");
     const dataInicio = `${ano}-${mesStr}-01`;
 
-    // 1. Buscar todas as matrículas ativas
+    // 1. Buscar todas as matrículas ativas (status 1)
     const ativas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
         statusMemberMembership: 1,
-        take: 25,
+        take: 50,
     });
 
     // 2. Buscar matrículas canceladas cujo cancelamento ocorreu durante ou após o mês de cálculo
-    // (Alunas que cancelaram em março ainda estavam ativas no mês de cálculo em fevereiro, por exemplo)
     const canceladas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
         statusMemberMembership: 2,
         cancelDateStart: dataInicio,
-        take: 25,
+        take: 50,
     });
 
-    // 3. Unir e remover possíveis duplicidades
+    // 3. Buscar contratos suspensos (status 3) — VIPs gratuitos podem ter status suspenso
+    //    quando não há cobranças futuras, mas o contrato ainda está vigente no período.
+    const suspensas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+        statusMemberMembership: 3,
+        take: 50,
+    });
+
+    // 4. Unir e remover possíveis duplicidades
     const todasMatriculas = new Map<number, EvoMemberMembership>();
-    for (const m of [...ativas, ...canceladas]) {
+    for (const m of [...ativas, ...canceladas, ...suspensas]) {
         todasMatriculas.set(m.idMemberMemberShip, m);
     }
 
