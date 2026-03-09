@@ -37,14 +37,32 @@ async function rateLimitedFetch(
         await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
-    return fetch(url, {
-        ...options,
-        headers: {
-            Authorization: getAuthHeader(),
-            "Content-Type": "application/json",
-            ...(options.headers as Record<string, string>),
-        },
-    });
+    let lastError: any;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const response = await fetch(url, {
+                ...options,
+                headers: {
+                    Authorization: getAuthHeader(),
+                    "Content-Type": "application/json",
+                    "Connection": "close", // Previne o reuso de sockets que a EVO API derruba
+                    ...(options.headers as Record<string, string>),
+                },
+            });
+            return response;
+        } catch (error: any) {
+            lastError = error;
+            // O erro 'terminated' ou 'UND_ERR_SOCKET' ocorre quando o load balancer da EVO
+            // fecha abruptamente a conexão TCP antes da resposta HTTP no nível Node.js
+            if (error.message?.includes('terminated') || error.code === 'UND_ERR_SOCKET') {
+                console.warn(`[EVO API] Socket terminated on attempt ${attempt}/3. Retrying...`);
+                await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+                continue;
+            }
+            throw error; // Lança imediatamente se for outro tipo de erro de rede
+        }
+    }
+    throw lastError;
 }
 
 export async function evoFetchPaginated<T>(
