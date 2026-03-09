@@ -275,7 +275,8 @@ export async function GET(req: NextRequest) {
                             if (isPresent) {
                                 contrib = CONTRIBUICAO_FREE;
                             } else {
-                                contrib = 0;
+                                // FREE ausente: não aparece na listagem (R$ 0 não faz sentido exibir)
+                                continue;
                             }
                         }
 
