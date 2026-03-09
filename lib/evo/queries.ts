@@ -149,6 +149,11 @@ export async function getMemberMembershipsById(idMember: number): Promise<EvoMem
 export function tipoDePlano(nameMembership: string): "fixo" | "free" {
     const lower = nameMembership.toLowerCase();
 
+    // Palavras que indicam isenção/combo gratuito batem qualquer outra regra (Ex: Bruna - FREE ... RECORRENTE)
+    if (lower.includes("free") || lower.includes("vip")) {
+        return "free";
+    }
+
     // Se o plano tiver 'fixa' ou 'recorrente' explícito, é sempre fixo
     if (lower.includes("fixa") || lower.includes("recorrente")) {
         return "fixo";
@@ -156,9 +161,7 @@ export function tipoDePlano(nameMembership: string): "fixo" | "free" {
 
     if (
         lower.includes("avulsa") ||
-        lower.includes("free") ||
         lower.includes("pacote") ||
-        lower.includes("vip") ||
         lower.includes("aulas")
     ) {
         return "free";

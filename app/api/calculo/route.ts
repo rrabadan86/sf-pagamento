@@ -192,9 +192,14 @@ export async function GET(req: NextRequest) {
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
                         const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
-                        // Não excluiremos mais diretamente os contratos de Circuito em aulas de Slimfit, 
-                        // para evitar o problema de excluir combos. Todas as alunas retêm seus contratos 
-                        // e a ordenação abaixo (Score) decidirá qual é o aplicável nesta aula.
+                        // Remover contratos "Circuito" em turmas de SlimFit (ex: Polyanna)
+                        // Note: Combos da Síntia ou Bruna usam "CIRC SLIM", então não são pegos por "circuito".
+                        if (!isCircuitoClass) {
+                            const semCircuito = memberContracts.filter(
+                                (m) => !(m.nameMembership || "").toLowerCase().includes("circuito")
+                            );
+                            if (semCircuito.length > 0) memberContracts = semCircuito;
+                        }
 
                         // Ordenar para escolher o contrato mais relevante
                         memberContracts.sort((a, b) => {
