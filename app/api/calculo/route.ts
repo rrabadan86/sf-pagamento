@@ -156,10 +156,10 @@ export async function GET(req: NextRequest) {
                         let memberContracts = memberships.filter((m) => m.idMember === idMember);
                         if (memberContracts.length === 0) continue;
 
-                        // Alunas VIP excluídas por determinação da gestão (não aparecem nem como FREE)
-                        const ALUNAS_VIP_EXCLUIDAS = ["juliana quintiliano", "paula vanessa carmo"];
+                        // Alunas VIP com R$ 0,00 por determinação da gestão (aparecem mas não geram remuneração)
+                        const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
-                        if (ALUNAS_VIP_EXCLUIDAS.some(exc => nomeAluna.includes(exc))) continue;
+                        const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
                         // Remover contratos "Circuito Slim" se a turma NÃO for Circuito
                         if (!isCircuitoClass) {
@@ -309,7 +309,10 @@ export async function GET(req: NextRequest) {
                             contrib = isFixoEmReposicao ? 0 : contribuicaoFixa(valorMes, percentual, diasDeTreinoNoMes);
                         } else {
                             // Alunas com plano Free só geram a remuneração de R$ 11,00 se estiverem PRESENTES (status === 0 na EVO)
-                            if (isPresent) {
+                            if (isVipZero) {
+                                // VIP especial: aparece sempre com R$ 0,00
+                                contrib = 0;
+                            } else if (isPresent) {
                                 contrib = CONTRIBUICAO_FREE;
                             } else {
                                 // FREE ausente: não aparece na listagem (R$ 0 não faz sentido exibir)
