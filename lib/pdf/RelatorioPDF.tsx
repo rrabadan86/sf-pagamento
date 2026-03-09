@@ -183,7 +183,75 @@ export function RelatorioPDF({
                     )}
                 </View>
 
+                {/* MATRIZ DE HORÁRIOS */}
+                {(() => {
+                    const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta"];
+                    type Cell = { totalMes: number; totalSomaAula: number; qtdAulas: number };
+                    const matriz = new Map<string, Map<string, Cell>>();
+
+                    const extractTime = (nome: string) => {
+                        const m = nome.match(/\d{2}h\d{2}|\d{2}:\d{2}|\d{2}h/);
+                        if (!m) return nome.split(' - ')[1] || nome;
+                        let t = m[0];
+                        if (t.length === 3) t = t.replace('h', ':00');
+                        else t = t.replace('h', ':');
+                        return t;
+                    };
+
+                    professor.turmas.forEach(t => {
+                        const time = extractTime(t.nomeAtividade);
+                        if (!matriz.has(time)) matriz.set(time, new Map());
+                        t.dias.forEach(d => {
+                            const dm = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta)/);
+                            if (!dm) return;
+                            const row = matriz.get(time)!;
+                            if (!row.has(dm[1])) row.set(dm[1], { totalMes: 0, totalSomaAula: 0, qtdAulas: 0 });
+                            const cell = row.get(dm[1])!;
+                            cell.totalMes += d.totalDiaNoMes;
+                            cell.totalSomaAula += d.valorFinalPorAula;
+                            cell.qtdAulas += 1;
+                        });
+                    });
+
+                    const rows = Array.from(matriz.keys()).sort();
+                    const colW = 65;
+                    const hW = 40;
+
+                    return (
+                        <View style={{ marginBottom: 20 }}>
+                            <Text style={[s.sectionTitle, { marginTop: 0 }]}>Matriz de Horários — {professor.nomeProfessor.split(" ")[0]}</Text>
+                            {/* Cabeçalho */}
+                            <View style={{ flexDirection: "row", backgroundColor: "#f1f5f9", padding: "5 6", borderRadius: 3, marginBottom: 2 }}>
+                                <Text style={{ width: hW, fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b" }}>Horário</Text>
+                                {cols.map(c => (
+                                    <Text key={c} style={{ width: colW, fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b", textAlign: "center" }}>{c}</Text>
+                                ))}
+                            </View>
+                            {/* Linhas */}
+                            {rows.map((time, ri) => (
+                                <View key={time} style={{ flexDirection: "row", padding: "4 6", backgroundColor: ri % 2 === 0 ? "#fff" : "#f8fafc", alignItems: "center" }}>
+                                    <Text style={{ width: hW, fontSize: 8, fontFamily: "Helvetica-Bold", color: "#1e293b" }}>{time}</Text>
+                                    {cols.map(col => {
+                                        const cell = matriz.get(time)?.get(col);
+                                        if (!cell) return <Text key={col} style={{ width: colW, fontSize: 7, color: "#cbd5e1", textAlign: "center" }}>—</Text>;
+                                        const media = cell.qtdAulas > 0 ? cell.totalSomaAula / cell.qtdAulas : 0;
+                                        return (
+                                            <View key={col} style={{ width: colW, alignItems: "center" }}>
+                                                <View style={{ backgroundColor: "#eff6ff", borderRadius: 3, padding: "4 6", alignItems: "center" }}>
+                                                    <Text style={{ fontSize: 7, fontFamily: "Helvetica-Bold", color: "#3b82f6" }}>{fmt(media)}/aula</Text>
+                                                    <Text style={{ fontSize: 6, color: "#64748b", marginTop: 1 }}>{fmt(cell.totalMes)}</Text>
+                                                </View>
+                                            </View>
+                                        );
+                                    })}
+                                </View>
+                            ))}
+                        </View>
+                    );
+                })()}
+
                 {/* TURMAS */}
+
                 {professor.turmas.map((turma, ti) => (
                     <View key={ti} style={s.turmaBlock}>
                         <View style={s.turmaHeader}>
