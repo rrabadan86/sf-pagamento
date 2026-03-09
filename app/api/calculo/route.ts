@@ -247,18 +247,23 @@ export async function GET(req: NextRequest) {
                             // Grade de matrículas históricas (ativas + removidas)
                             const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
 
+                            // Helper: compara apenas a data (YYYY-MM-DD), ignorando hora/timezone.
+                            // O EVO armazena startDate/endDate em UTC-3, mas JS interpreta sem timezone como UTC.
+                            // Sem isso, "2026-02-25T03:00:00" (meia-noite BRT) < "2026-02-25T00:00:00" (meia-noite UTC) → bug.
+                            const dayOnly = (dateStr: string) => {
+                                const [y, mo, d] = dateStr.substring(0, 10).split('-').map(Number);
+                                return new Date(y, mo - 1, d).getTime(); // local midnight
+                            };
+                            const classDay = new Date(dataAula.getFullYear(), dataAula.getMonth(), dataAula.getDate()).getTime();
+
                             // Verifica se havia uma matrícula fixa vigente NA DATA DA AULA para esse dia/horário
-                            // Isso resolve o caso de alunas que trocaram de horário no mês:
-                            //   - Antes da troca: matrícula antiga ainda estava ativa → não é reposição ✅
-                            //   - Depois da troca: nova matrícula está ativa → não é reposição ✅
-                            //   - Fazendo make-up: nenhuma matrícula vigente para esse horário → é reposição ✅
                             const ehOficialmenteDela = agendaAluna.some(ag => {
                                 if (ag.weekDay !== diaAulaNum) return false;
                                 if (!ag.startTime.startsWith(startTimeMask)) return false;
-                                // Verifica se a matrícula estava ativa na data da aula
-                                const inicio = new Date(ag.startDate).getTime();
-                                const fim = ag.endDate ? new Date(ag.endDate).getTime() : Infinity;
-                                return dataAulaTs >= inicio && dataAulaTs <= fim;
+                                // Comparação só por data (sem hora), sem ambiguidade de timezone
+                                const inicio = dayOnly(ag.startDate);
+                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                                return classDay >= inicio && classDay <= fim;
                             });
 
                             if (!ehOficialmenteDela) {
