@@ -4,7 +4,7 @@ import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-    const [email, setEmail] = useState("gestor@academia.com");
+    const [email, setEmail] = useState("slimfit.setorbueno@gmail.com");
     const [senha, setSenha] = useState("");
     const [erro, setErro] = useState("");
     const [loading, setLoading] = useState(false);
