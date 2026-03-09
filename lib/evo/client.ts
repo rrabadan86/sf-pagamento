@@ -1,10 +1,6 @@
 /**
  * Cliente de integração com a API EVO (W12)
  * Autenticação Basic Auth: Base64(DNS:TOKEN)
- *
- * OTIMIZADO: Rate limiter com semáforo de concorrência (max 3 simultâneas)
- * em vez de fila sequencial com 300ms de delay fixo.
- * Isso permite múltiplas requisições voarem em paralelo respeitando o limite da EVO.
  */
 
 const EVO_BASE_URL = process.env.EVO_BASE_URL!;
@@ -18,65 +14,37 @@ function getAuthHeader(): string {
     return `Basic ${credentials}`;
 }
 
-// ─── Semáforo de concorrência ─────────────────────────────────────────────────
-// A EVO permite ~4 req/s. Usamos max 3 simultâneas + 100ms de gap mínimo entre disparos.
-// Isso é MUITO mais rápido que o modelo antigo de fila serial com 300ms entre cada uma.
-
-const MAX_CONCURRENT = 3;
-const MIN_GAP_MS = 100; // gap mínimo entre disparos consecutivos
-
-let activeFetches = 0;
-let lastDispatchTime = 0;
-const waitQueue: (() => void)[] = [];
-
-function releaseSlot() {
-    activeFetches--;
-    if (waitQueue.length > 0) {
-        const next = waitQueue.shift()!;
-        next();
-    }
-}
-
-async function acquireSlot(): Promise<void> {
-    if (activeFetches < MAX_CONCURRENT) {
-        activeFetches++;
-        // Respeitar gap mínimo entre disparos
-        const now = Date.now();
-        const elapsed = now - lastDispatchTime;
-        if (elapsed < MIN_GAP_MS) {
-            await new Promise((r) => setTimeout(r, MIN_GAP_MS - elapsed));
-        }
-        lastDispatchTime = Date.now();
-        return;
-    }
-    // Esperar até que um slot libere
-    return new Promise<void>((resolve) => {
-        waitQueue.push(() => {
-            activeFetches++;
-            lastDispatchTime = Date.now();
-            resolve();
-        });
-    });
-}
+// Fila assíncrona segura para evitar concorrência no Promise.all
+// Limite da EVO: 4 requisições por segundo. (~250ms por req). Usamos 300ms de margem.
+let nextAvailableTime = Date.now();
+const MIN_INTERVAL_MS = 300;
 
 async function rateLimitedFetch(
     url: string,
     options: RequestInit = {}
 ): Promise<Response> {
-    await acquireSlot();
-    try {
-        return await fetch(url, {
-            ...options,
-            headers: {
-                Authorization: getAuthHeader(),
-                "Content-Type": "application/json",
-                ...(options.headers as Record<string, string>),
-            },
-        });
-    } finally {
-        // Liberar o slot após um pequeno delay para não estourar o rate limit
-        setTimeout(() => releaseSlot(), MIN_GAP_MS);
+    const now = Date.now();
+    let delay = 0;
+
+    if (now < nextAvailableTime) {
+        delay = nextAvailableTime - now;
+        nextAvailableTime += MIN_INTERVAL_MS;
+    } else {
+        nextAvailableTime = now + MIN_INTERVAL_MS;
     }
+
+    if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    return fetch(url, {
+        ...options,
+        headers: {
+            Authorization: getAuthHeader(),
+            "Content-Type": "application/json",
+            ...(options.headers as Record<string, string>),
+        },
+    });
 }
 
 export async function evoFetchPaginated<T>(
@@ -108,6 +76,7 @@ export async function evoFetchPaginated<T>(
         const textResponse = await res.text();
         const data = textResponse ? JSON.parse(textResponse) : {};
 
+        // A API EVO retorna array diretamente ou dentro de um campo
         const page: T[] = Array.isArray(data) ? data : data.items ?? data.data ?? [];
 
         results.push(...page);
