@@ -137,6 +137,7 @@ export async function getMemberMemberships(
 export async function getMemberMembershipsById(idMember: number): Promise<EvoMemberMembership[]> {
     return await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
         idMember,
+        statusMemberMembership: 1, // Vamos forçar ativo para ver se a EVO traz o VIP
         take: 50,
     });
 }
@@ -151,7 +152,8 @@ export function tipoDePlano(nameMembership: string): "fixo" | "free" {
         lower.includes("avulsa") ||
         lower.includes("free") ||
         lower.includes("pacote") ||
-        lower.includes("vip")
+        lower.includes("vip") ||
+        lower.includes("aulas")
     ) {
         return "free";
     }

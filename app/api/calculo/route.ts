@@ -144,8 +144,8 @@ export async function GET(req: NextRequest) {
                     const pMes = (dataAula.getMonth() + 1).toString().padStart(2, "0");
                     const diaDesc = `${nomeDiaStr} — ${pDia}/${pMes} às ${aula.startTime}`;
 
-                    const statusMatriculadas = new Map<number, { replacement: boolean; status: number }>();
-                    enrollments.forEach(e => statusMatriculadas.set(e.idMember, { replacement: e.replacement, status: e.status }));
+                    const statusMatriculadas = new Map<number, { name: string, replacement: boolean; status: number }>();
+                    enrollments.forEach(e => statusMatriculadas.set(e.idMember, { name: e.name, replacement: e.replacement, status: e.status }));
                     const alunasDoMes: AlunaCalculo[] = [];
                     // Validar usando a data exata da aula em questão:
                     const calcDate = new Date(ano, mes - 1, dataAula.getDate());
@@ -169,19 +169,40 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                        if (memberContracts.length === 0) continue;
+                        if (memberContracts.length === 0) {
+                            if (isPresent) {
+                                // Fallback VIP/Avulsa Virtual - Aluna assistiu à aula, garantimos R$ 11
+                                memberContracts = [{
+                                    idMember: idMember,
+                                    name: evoData.name || "Aluna Avulsa/VIP",
+                                    nameMembership: "Plano Avulso/VIP",
+                                    membershipStatus: "Ativo",
+                                    saleValue: 0,
+                                    receivables: [],
+                                    membershipStart: "2000-01-01T00:00:00",
+                                    membershipEnd: "2099-01-01T00:00:00"
+                                } as unknown as EvoMemberMembership];
+                            } else {
+                                continue;
+                            }
+                        }
 
                         // Alunas VIP com R$ 0,00 por determinação da gestão (aparecem mas não geram remuneração)
                         const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
                         const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
-                        // Remover contratos "Circuito Slim" se a turma NÃO for Circuito
+                        // Remover contratos exclusivos de "Circuito Slim" em turmas de SlimFit
                         if (!isCircuitoClass) {
-                            const semCircuito = memberContracts.filter(
-                                (m) => !(m.nameMembership || "").toLowerCase().includes("circuito slim")
-                            );
-                            if (semCircuito.length > 0) memberContracts = semCircuito;
+                            const semCircuitoExclusivo = memberContracts.filter((m) => {
+                                const nm = (m.nameMembership || "").toLowerCase();
+                                // Se tem "circuito slim", só mantemos se tb tiver "slimfit" (combo)
+                                if (nm.includes("circuito slim")) {
+                                    return nm.includes("slimfit") || nm.includes("slim");
+                                }
+                                return true;
+                            });
+                            if (semCircuitoExclusivo.length > 0) memberContracts = semCircuitoExclusivo;
                         }
 
                         // Ordenar para escolher o contrato mais relevante
