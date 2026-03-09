@@ -424,7 +424,42 @@ export async function GET(req: NextRequest) {
                 );
             }
 
+
+            // MERGE DE TURMAS DE SÁBADO
+            // O professor recebe R$ 70 por sábado trabalhado (já garantido acima).
+            // Aqui juntamos todas as turmas que são exclusivamente de Sábado em uma única entrada visual.
+            const turmasSabado = turmasCalculadas.filter(t =>
+                t.dias.length > 0 && t.dias.every(d => d.diaDaSemana.includes("Sábado"))
+            );
+            const turmasNaoSabado = turmasCalculadas.filter(t =>
+                !t.diasDaSemana.every(d => d.includes("Sábado"))
+            );
+
+            if (turmasSabado.length > 1) {
+                // Coletar dias de sábado únicos com valor (que não foram zerados como duplicata)
+                const diasSabadoPagos: ResultadoDiaDaSemana[] = [];
+                for (const t of turmasSabado) {
+                    for (const d of t.dias) {
+                        if (d.totalDiaNoMes > 0) {
+                            diasSabadoPagos.push(d);
+                        }
+                    }
+                }
+
+                const totalSabadoNoMes = round2(diasSabadoPagos.reduce((s, d) => s + d.totalDiaNoMes, 0));
+                const turmaSabadoMerged: ResultadoTurma = {
+                    nomeAtividade: "SLIMFIT B / Circuito B - 09:00",
+                    diasDaSemana: ["Sábado"],
+                    totalAulas: diasSabadoPagos.length,
+                    dias: diasSabadoPagos,
+                    totalTurmaNoMes: totalSabadoNoMes,
+                };
+
+                turmasCalculadas.splice(0, turmasCalculadas.length, ...turmasNaoSabado, turmaSabadoMerged);
+            }
+
             const totalGeralNoMes = round2(
+
                 turmasCalculadas.reduce((sum, t) => sum + t.totalTurmaNoMes, 0)
             );
 

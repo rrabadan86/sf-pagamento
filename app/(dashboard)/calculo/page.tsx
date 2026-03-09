@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState, useCallback } from "react";
 
 interface AlunaCalculo {
@@ -177,7 +177,7 @@ function TurmaBlock({ turma, profId, onExcluirAluna }: { turma: ResultadoTurma, 
 }
 
 function MatrizProfessor({ prof }: { prof: ResultadoProfessor }) {
-    const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta"];
+    const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
     // Monta: horario → dia → { valorAula, totalMes, qtd }
     type Cell = { totalMes: number; totalSomaAula: number; qtdAulas: number };
@@ -188,7 +188,7 @@ function MatrizProfessor({ prof }: { prof: ResultadoProfessor }) {
         if (!matriz.has(time)) matriz.set(time, new Map());
 
         t.dias.forEach(d => {
-            const dayMatch = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta)/);
+            const dayMatch = d.diaDaSemana.match(/^(Segunda|Ter\xE7a|Quarta|Quinta|Sexta|S\xE1bado)/);
             if (!dayMatch) return;
             const baseDay = dayMatch[1];
             const row = matriz.get(time)!;
@@ -367,7 +367,7 @@ function TabelaResumoGrade({ professores, professoresFiltrados, horariosOcultos,
             if (!matriz.has(time)) matriz.set(time, new Map());
 
             t.dias.forEach(d => {
-                const dayMatch = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta)/);
+                const dayMatch = d.diaDaSemana.match(/^(Segunda|Ter\xE7a|Quarta|Quinta|Sexta|S\xE1bado)/);
                 if (dayMatch) {
                     const baseDay = dayMatch[1];
                     if (!matriz.get(time)!.has(baseDay)) matriz.get(time)!.set(baseDay, new Map());
@@ -1020,3 +1020,4 @@ export default function CalculoPage() {
         </div>
     );
 }
+
