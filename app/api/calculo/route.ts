@@ -59,11 +59,25 @@ export async function GET(req: NextRequest) {
 
         // Coletar todos os IDs de membros matriculados para buscar suas grades fixas
         const todosIdMatriculadas = new Set<number>();
-        for (const aula of schedule) {
-            const idSession = (aula as any).idAtividadeSessao;
-            const enrollments = await getTurmaEnrollments(idSession);
-            enrollments.forEach(e => todosIdMatriculadas.add(e.idMember));
-        }
+        const sessionEnrollmentsMap = new Map<number, EvoEnrollment[]>();
+
+        // Paralelizar a busca de enrollments para todas as sessões para evitar requisições sequenciais / duplicadas
+        await Promise.all(
+            schedule.map(async (aula: any) => {
+                const idSession = aula.idAtividadeSessao;
+                // Otimização vital: Não buscar enrollments se a aula não tiver ocupação
+                const ocupation = aula.ocupation ?? aula.totalBookings ?? 0;
+
+                if (ocupation === 0) {
+                    sessionEnrollmentsMap.set(idSession, []);
+                    return;
+                }
+
+                const enrollments = await getTurmaEnrollments(idSession);
+                sessionEnrollmentsMap.set(idSession, enrollments);
+                enrollments.forEach(e => todosIdMatriculadas.add(e.idMember));
+            })
+        );
 
         // Mega Cache das Grades Fixas dos alunos que passaram pelo professor neste mês
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
@@ -127,14 +141,12 @@ export async function GET(req: NextRequest) {
                     (a, b) => new Date(a.activityDate).getTime() - new Date(b.activityDate).getTime()
                 );
 
-                // Requisitar matrículas em lote para todas as sessões para performance
-                const aulasComMatriculas = await Promise.all(
-                    aulasOrdenadas.map(async (aula) => {
-                        const idSession = (aula as any).idAtividadeSessao;
-                        const enrollments = await getTurmaEnrollments(idSession);
-                        return { aula, enrollments };
-                    })
-                );
+                // Reutilizar o cache de matrículas (enrollments) previamente carregado
+                const aulasComMatriculas = aulasOrdenadas.map((aula) => {
+                    const idSession = (aula as any).idAtividadeSessao;
+                    const enrollments = sessionEnrollmentsMap.get(idSession) || [];
+                    return { aula, enrollments };
+                });
 
                 for (const { aula, enrollments } of aulasComMatriculas) {
                     const dataAula = new Date(aula.activityDate);
