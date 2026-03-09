@@ -176,6 +176,69 @@ function TurmaBlock({ turma, profId, onExcluirAluna }: { turma: ResultadoTurma, 
     );
 }
 
+function MatrizProfessor({ prof }: { prof: ResultadoProfessor }) {
+    const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta"];
+
+    // Monta: horario → dia → { valorAula, totalMes, qtd }
+    type Cell = { totalMes: number; totalSomaAula: number; qtdAulas: number };
+    const matriz = new Map<string, Map<string, Cell>>();
+
+    prof.turmas.forEach(t => {
+        const time = extrairHorario(t.nomeAtividade);
+        if (!matriz.has(time)) matriz.set(time, new Map());
+
+        t.dias.forEach(d => {
+            const dayMatch = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta)/);
+            if (!dayMatch) return;
+            const baseDay = dayMatch[1];
+            const row = matriz.get(time)!;
+            if (!row.has(baseDay)) row.set(baseDay, { totalMes: 0, totalSomaAula: 0, qtdAulas: 0 });
+            const cell = row.get(baseDay)!;
+            cell.totalMes += d.totalDiaNoMes;
+            cell.totalSomaAula += d.valorFinalPorAula;
+            cell.qtdAulas += 1;
+        });
+    });
+
+    const rows = Array.from(matriz.keys()).sort();
+
+    return (
+        <div style={{ marginBottom: 20, overflowX: "auto" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Matriz de Horários — {prof.nomeProfessor.split(" ")[0]}
+            </div>
+            <table className="table" style={{ fontSize: 12, width: "100%" }}>
+                <thead>
+                    <tr>
+                        <th style={{ width: 80 }}>Horário</th>
+                        {cols.map(c => <th key={c} style={{ textAlign: "center" }}>{c}</th>)}
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map(time => (
+                        <tr key={time}>
+                            <td style={{ fontWeight: 600 }}>{time}</td>
+                            {cols.map(col => {
+                                const cell = matriz.get(time)?.get(col);
+                                if (!cell) return <td key={col} style={{ textAlign: "center", color: "var(--text-faint)" }}>—</td>;
+                                const media = cell.qtdAulas > 0 ? cell.totalSomaAula / cell.qtdAulas : 0;
+                                return (
+                                    <td key={col} style={{ textAlign: "center", padding: "6px 4px" }}>
+                                        <div style={{ backgroundColor: "var(--accent-light)", borderRadius: 4, padding: "5px 8px", color: "var(--accent-hover)" }}>
+                                            <div style={{ fontWeight: 700, fontSize: 12 }}>{fmt(media)}/aula</div>
+                                            <div style={{ fontWeight: 600, fontSize: 11, marginTop: 2, color: "var(--text-muted)" }}>{fmt(cell.totalMes)}</div>
+                                        </div>
+                                    </td>
+                                );
+                            })}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
 function ProfessorCard({
     prof,
     mes,
@@ -245,6 +308,9 @@ function ProfessorCard({
 
             {open && (
                 <div className="professor-card-body">
+                    {/* Mini Matriz de Horários filtrada para este professor */}
+                    <MatrizProfessor prof={prof} />
+
                     {prof.turmas.map((turma, i) => (
                         <TurmaBlock key={i} turma={turma} profId={prof.idProfessorEvo} onExcluirAluna={onExcluirAluna} />
                     ))}

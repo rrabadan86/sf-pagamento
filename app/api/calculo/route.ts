@@ -156,6 +156,11 @@ export async function GET(req: NextRequest) {
                         let memberContracts = memberships.filter((m) => m.idMember === idMember);
                         if (memberContracts.length === 0) continue;
 
+                        // Alunas VIP excluídas por determinação da gestão (não aparecem nem como FREE)
+                        const ALUNAS_VIP_EXCLUIDAS = ["juliana quintiliano", "paula vanessa carmo"];
+                        const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
+                        if (ALUNAS_VIP_EXCLUIDAS.some(exc => nomeAluna.includes(exc))) continue;
+
                         // Remover contratos "Circuito Slim" se a turma NÃO for Circuito
                         if (!isCircuitoClass) {
                             const semCircuito = memberContracts.filter(

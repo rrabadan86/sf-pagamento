@@ -140,7 +140,8 @@ export function tipoDePlano(nameMembership: string): "fixo" | "free" {
     if (
         lower.includes("avulsa") ||
         lower.includes("free") ||
-        lower.includes("pacote")
+        lower.includes("pacote") ||
+        lower.includes("vip")
     ) {
         return "free";
     }
