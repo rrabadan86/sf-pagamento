@@ -63,32 +63,27 @@ export async function GET(req: NextRequest) {
         const todosIdMatriculadas = new Set<number>();
         const sessionEnrollmentsMap = new Map<number, EvoEnrollment[]>();
 
-        // Paralelizar a busca de enrollments para todas as sessões para evitar requisições sequenciais / duplicadas
-        await Promise.all(
-            schedule.map(async (aula: any) => {
-                const idSession = aula.idAtividadeSessao;
-                // Otimização vital: Não buscar enrollments se a aula não tiver ocupação
-                const ocupation = aula.ocupation ?? aula.totalBookings ?? 0;
+        // Buscar enrollments sequencialmente para não esgotar sockets do Node.js
+        for (const aula of schedule) {
+            const idSession = (aula as any).idAtividadeSessao;
+            const ocupation = (aula as any).ocupation ?? (aula as any).totalBookings ?? 0;
 
-                if (ocupation === 0) {
-                    sessionEnrollmentsMap.set(idSession, []);
-                    return;
-                }
+            if (ocupation === 0) {
+                sessionEnrollmentsMap.set(idSession, []);
+                continue;
+            }
 
-                const enrollments = await getTurmaEnrollments(idSession);
-                sessionEnrollmentsMap.set(idSession, enrollments);
-                enrollments.forEach(e => todosIdMatriculadas.add(e.idMember));
-            })
-        );
+            const enrollments = await getTurmaEnrollments(idSession);
+            sessionEnrollmentsMap.set(idSession, enrollments);
+            enrollments.forEach(e => todosIdMatriculadas.add(e.idMember));
+        }
 
-        // Mega Cache das Grades Fixas dos alunos que passaram pelo professor neste mês
+        // Mega Cache das Grades Fixas dos alunos - também sequencial
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
-        await Promise.all(
-            Array.from(todosIdMatriculadas).map(async (idMem) => {
-                const fixedScheduleArray = await getMemberFixedSchedules(idMem);
-                matriculasFixasGlobal.set(idMem, fixedScheduleArray);
-            })
-        );
+        for (const idMem of Array.from(todosIdMatriculadas)) {
+            const fixedScheduleArray = await getMemberFixedSchedules(idMem);
+            matriculasFixasGlobal.set(idMem, fixedScheduleArray);
+        }
 
         // 4. Sincronizar professores novos (percentual padrão 20%) + buscar percentual vigente
         const resultado: ResultadoProfessor[] = [];
