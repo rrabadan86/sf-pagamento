@@ -148,6 +148,12 @@ export async function getMemberMembershipsById(idMember: number): Promise<EvoMem
  */
 export function tipoDePlano(nameMembership: string): "fixo" | "free" {
     const lower = nameMembership.toLowerCase();
+
+    // Se o plano tiver 'fixa' ou 'recorrente' explícito, é sempre fixo
+    if (lower.includes("fixa") || lower.includes("recorrente")) {
+        return "fixo";
+    }
+
     if (
         lower.includes("avulsa") ||
         lower.includes("free") ||

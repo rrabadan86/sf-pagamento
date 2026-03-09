@@ -192,18 +192,9 @@ export async function GET(req: NextRequest) {
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
                         const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
-                        // Remover contratos exclusivos de "Circuito Slim" em turmas de SlimFit
-                        if (!isCircuitoClass) {
-                            const semCircuitoExclusivo = memberContracts.filter((m) => {
-                                const nm = (m.nameMembership || "").toLowerCase();
-                                // Se tem "circuito slim", só mantemos se tb tiver "slimfit" (combo)
-                                if (nm.includes("circuito slim")) {
-                                    return nm.includes("slimfit") || nm.includes("slim");
-                                }
-                                return true;
-                            });
-                            if (semCircuitoExclusivo.length > 0) memberContracts = semCircuitoExclusivo;
-                        }
+                        // Não excluiremos mais diretamente os contratos de Circuito em aulas de Slimfit, 
+                        // para evitar o problema de excluir combos. Todas as alunas retêm seus contratos 
+                        // e a ordenação abaixo (Score) decidirá qual é o aplicável nesta aula.
 
                         // Ordenar para escolher o contrato mais relevante
                         memberContracts.sort((a, b) => {
