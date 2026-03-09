@@ -753,10 +753,15 @@ export default function CalculoPage() {
 
     const anos = Array.from({ length: 3 }, (_, i) => now.getFullYear() - i);
 
-    // Derivar resultado filtrado (exclui turmas cujo horário foi removido na Matriz)
+    // Derivar resultado filtrado (exclui turmas de seg-sex cujo horário foi removido na Matriz)
+    // Sábado NUNCA é filtrado pela matriz (que só exibe seg-sex), para não sumir da listagem.
     const resultadoFiltrado = resultado ? {
         professores: resultado.professores.map(p => {
-            const turmasFiltradas = p.turmas.filter(t => !horariosOcultos.has(extrairHorario(t.nomeAtividade)));
+            const turmasFiltradas = p.turmas.filter(t => {
+                const isSabadoTurma = t.diasDaSemana.every(d => d.includes("Sábado"));
+                if (isSabadoTurma) return true; // sábado nunca oculta
+                return !horariosOcultos.has(extrairHorario(t.nomeAtividade));
+            });
             const totalFiltrado = Number(turmasFiltradas.reduce((s, t) => s + t.totalTurmaNoMes, 0).toFixed(2));
             return { ...p, turmas: turmasFiltradas, totalGeralNoMes: totalFiltrado };
         })
@@ -828,22 +833,37 @@ export default function CalculoPage() {
             {resultado && !loading && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     {/* Resumo */}
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 8 }}>
-                        <div className="card-sm">
-                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Professores</div>
-                            <div style={{ fontSize: 22, fontWeight: 700 }}>{resultado.professores.length}</div>
-                        </div>
-                        <div className="card-sm">
-                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Total Turmas</div>
-                            <div style={{ fontSize: 22, fontWeight: 700 }}>{resultadoFiltrado!.professores.reduce((s, p) => s + p.turmas.length, 0)}</div>
-                        </div>
-                        <div className="card-sm">
-                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Total Geral</div>
-                            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--accent-hover)" }}>
-                                {fmt(resultadoFiltrado!.professores.reduce((s, p) => s + p.totalGeralNoMes, 0))}
+                    {(() => {
+                        // Alunas ativas únicas (exclui VIP = plano contendo "vip")
+                        const alunaAtivaIds = new Set<number>();
+                        resultado.professores.forEach(p => p.turmas.forEach(t => t.dias.forEach(d => d.alunas.forEach(a => {
+                            if (!a.nomeContrato.toLowerCase().includes("vip") && a.statusContrato === "Ativo") {
+                                alunaAtivaIds.add(a.idMember);
+                            }
+                        }))));
+                        return (
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 8 }}>
+                                <div className="card-sm">
+                                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Professores</div>
+                                    <div style={{ fontSize: 22, fontWeight: 700 }}>{resultado.professores.length}</div>
+                                </div>
+                                <div className="card-sm">
+                                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Total Turmas</div>
+                                    <div style={{ fontSize: 22, fontWeight: 700 }}>{resultadoFiltrado!.professores.reduce((s, p) => s + p.turmas.length, 0)}</div>
+                                </div>
+                                <div className="card-sm">
+                                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Alunas Ativas</div>
+                                    <div style={{ fontSize: 22, fontWeight: 700, color: "var(--yellow)" }}>{alunaAtivaIds.size}</div>
+                                </div>
+                                <div className="card-sm">
+                                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Total Geral</div>
+                                    <div style={{ fontSize: 22, fontWeight: 700, color: "var(--accent-hover)" }}>
+                                        {fmt(resultadoFiltrado!.professores.reduce((s, p) => s + p.totalGeralNoMes, 0))}
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    </div>
+                        );
+                    })()}
 
                     {/* Matriz Grade de Resumo e Average/Hour */}
                     {resultado.professores.length > 0 && (
