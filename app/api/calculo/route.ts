@@ -155,8 +155,19 @@ export async function GET(req: NextRequest) {
                         const isPresent = evoData.status === 0;
                         let memberContracts = memberships.filter((m) => m.idMember === idMember);
 
-                        // RESGATE DE CONTRATOS VIP/FREE OMITIDOS PELA EVO (Fallback)
-                        if (memberContracts.length === 0) {
+                        let precisaBuscarIndividual = memberContracts.length === 0;
+
+                        // Se a aluna está numa turma SlimFit, mas a EVO só retornou contratos de "Circuito",
+                        // é altamente provável que a EVO tenha omitido o contrato Fixo (ex: Polyanna, Grazi).
+                        if (!precisaBuscarIndividual && !isCircuitoClass) {
+                            const soTemCircuito = memberContracts.every(m => (m.nameMembership || "").toLowerCase().includes("circuito"));
+                            if (soTemCircuito) {
+                                precisaBuscarIndividual = true;
+                            }
+                        }
+
+                        // RESGATE DE CONTRATOS VIP/FREE/MÚLTIPLOS OMITIDOS PELA EVO (Fallback)
+                        if (precisaBuscarIndividual) {
                             try {
                                 const fetchedContracts = await getMemberMembershipsById(idMember);
                                 if (fetchedContracts && fetchedContracts.length > 0) {
