@@ -250,6 +250,27 @@ export function RelatorioPDF({
                     );
                 })()}
 
+                {/* RESUMO FINANCEIRO — abaixo da matriz */}
+                {(() => {
+                    const totalAulasPagas = professor.turmas.reduce(
+                        (s, t) => s + t.dias.reduce((sd, d) => sd + (d.valorFinalPorAula > 0 ? 1 : 0), 0), 0
+                    );
+                    const mediaPorAula = totalAulasPagas > 0 ? professor.totalGeralNoMes / totalAulasPagas : 0;
+                    return (
+                        <View style={{ flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 24, marginBottom: 16, padding: "10 14", backgroundColor: "#0f172a", borderRadius: 6 }}>
+                            <View style={{ alignItems: "flex-end" }}>
+                                <Text style={{ fontSize: 7, color: "#94a3b8", textTransform: "uppercase" }}>R$/Aula Médio</Text>
+                                <Text style={{ fontSize: 11, fontFamily: "Helvetica-Bold", color: "#818cf8", marginTop: 2 }}>{fmt(mediaPorAula)}</Text>
+                            </View>
+                            <View style={{ width: 1, height: 28, backgroundColor: "#334155" }} />
+                            <View style={{ alignItems: "flex-end" }}>
+                                <Text style={{ fontSize: 7, color: "#94a3b8", textTransform: "uppercase" }}>Total a Pagar no Mês</Text>
+                                <Text style={{ fontSize: 14, fontFamily: "Helvetica-Bold", color: "#818cf8", marginTop: 2 }}>{fmt(professor.totalGeralNoMes)}</Text>
+                            </View>
+                        </View>
+                    );
+                })()}
+
                 {/* TURMAS */}
 
                 {professor.turmas.map((turma, ti) => (
