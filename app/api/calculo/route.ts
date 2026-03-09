@@ -5,6 +5,8 @@ import { getSchedule, getMemberMemberships, getMemberMembershipsById, EvoSchedul
 import { getTurmaEnrollments, EvoEnrollment, getMemberFixedSchedules, EvoFixedSchedule } from "@/lib/evo/enrollments";
 import { calcularDiaDaSemana, contribuicaoFixa, CONTRIBUICAO_FREE, round2, contarAulasMes, DIAS_SEMANA, AlunaCalculo, ResultadoProfessor, ResultadoTurma, ResultadoDiaDaSemana } from "@/lib/calculos";
 
+export const maxDuration = 120;
+
 export async function GET(req: NextRequest) {
     const session = await getServerSession();
     if (!session) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });

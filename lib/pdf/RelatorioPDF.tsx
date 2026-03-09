@@ -185,7 +185,7 @@ export function RelatorioPDF({
 
                 {/* MATRIZ DE HORÁRIOS */}
                 {(() => {
-                    const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta"];
+                    const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
                     type Cell = { totalMes: number; totalSomaAula: number; qtdAulas: number };
                     const matriz = new Map<string, Map<string, Cell>>();
 
@@ -202,7 +202,7 @@ export function RelatorioPDF({
                         const time = extractTime(t.nomeAtividade);
                         if (!matriz.has(time)) matriz.set(time, new Map());
                         t.dias.forEach(d => {
-                            const dm = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta)/);
+                            const dm = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta|Sábado)/);
                             if (!dm) return;
                             const row = matriz.get(time)!;
                             if (!row.has(dm[1])) row.set(dm[1], { totalMes: 0, totalSomaAula: 0, qtdAulas: 0 });
@@ -214,7 +214,7 @@ export function RelatorioPDF({
                     });
 
                     const rows = Array.from(matriz.keys()).sort();
-                    const colW = 65;
+                    const colW = 55;
                     const hW = 40;
 
                     return (
