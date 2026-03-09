@@ -15,9 +15,9 @@ function getAuthHeader(): string {
 }
 
 // Fila assíncrona segura para evitar concorrência no Promise.all
-// Limite da EVO: 4 requisições por segundo. (~250ms por req). Usamos 300ms de margem.
+// Limite da EVO: 4 requisições por segundo. (~250ms por req). Usamos 150ms de margem.
 let nextAvailableTime = Date.now();
-const MIN_INTERVAL_MS = 300;
+const MIN_INTERVAL_MS = 150;
 
 async function rateLimitedFetch(
     url: string,
