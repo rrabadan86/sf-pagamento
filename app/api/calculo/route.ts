@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
-import { getSchedule, getMemberMemberships, EvoSchedule, EvoMemberMembership, statusContrato, temPagamentoNoMes, tipoDePlano } from "@/lib/evo/queries";
+import { getSchedule, getMemberMemberships, getMemberMembershipsById, EvoSchedule, EvoMemberMembership, statusContrato, temPagamentoNoMes, tipoDePlano } from "@/lib/evo/queries";
 import { getTurmaEnrollments, EvoEnrollment, getMemberFixedSchedules, EvoFixedSchedule } from "@/lib/evo/enrollments";
 import { calcularDiaDaSemana, contribuicaoFixa, CONTRIBUICAO_FREE, round2, contarAulasMes, DIAS_SEMANA, AlunaCalculo, ResultadoProfessor, ResultadoTurma, ResultadoDiaDaSemana } from "@/lib/calculos";
 
@@ -154,6 +154,21 @@ export async function GET(req: NextRequest) {
                         const isEvoReplacement = evoData.replacement;
                         const isPresent = evoData.status === 0;
                         let memberContracts = memberships.filter((m) => m.idMember === idMember);
+
+                        // RESGATE DE CONTRATOS VIP/FREE OMITIDOS PELA EVO (Fallback)
+                        if (memberContracts.length === 0) {
+                            try {
+                                const fetchedContracts = await getMemberMembershipsById(idMember);
+                                if (fetchedContracts && fetchedContracts.length > 0) {
+                                    // Adiciona ao topo para consultas futuras na mesma execução
+                                    memberships.push(...fetchedContracts);
+                                    memberContracts = fetchedContracts;
+                                }
+                            } catch (e) {
+                                console.error(`Erro ao resgatar contrato idMember=${idMember}`, e);
+                            }
+                        }
+
                         if (memberContracts.length === 0) continue;
 
                         // Alunas VIP com R$ 0,00 por determinação da gestão (aparecem mas não geram remuneração)

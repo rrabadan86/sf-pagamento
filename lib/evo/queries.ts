@@ -131,6 +131,17 @@ export async function getMemberMemberships(
 }
 
 /**
+ * Busca todos os contratos de uma aluna INDIVIDUALMENTE. Útil para 
+ * resgatar contratos VIP/Free que não retornam na listagem de status 1 ou 2 globais.
+ */
+export async function getMemberMembershipsById(idMember: number): Promise<EvoMemberMembership[]> {
+    return await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+        idMember,
+        take: 50,
+    });
+}
+
+/**
  * Determina tipo de plano da aluna a partir do nameMembership.
  * "Avulsa", "Free", "Pacote" → free; qualquer outro → fixo (mensalista)
  */
