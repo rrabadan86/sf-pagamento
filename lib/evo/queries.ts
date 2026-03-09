@@ -121,16 +121,9 @@ export async function getMemberMemberships(
         take: 50,
     });
 
-    // 3. Buscar contratos suspensos (status 3) — VIPs gratuitos podem ter status suspenso
-    //    quando não há cobranças futuras, mas o contrato ainda está vigente no período.
-    const suspensas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        statusMemberMembership: 3,
-        take: 50,
-    });
-
-    // 4. Unir e remover possíveis duplicidades
+    // 3. Unir e remover possíveis duplicidades
     const todasMatriculas = new Map<number, EvoMemberMembership>();
-    for (const m of [...ativas, ...canceladas, ...suspensas]) {
+    for (const m of [...ativas, ...canceladas]) {
         todasMatriculas.set(m.idMemberMemberShip, m);
     }
 
