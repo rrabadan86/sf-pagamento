@@ -281,6 +281,11 @@ function ProfessorCard({
                             {fmt(prof.totalGeralNoMes)}
                         </div>
                         <div style={{ fontSize: 11, color: "var(--text-muted)" }}>total no mês</div>
+                        {(() => {
+                            const totalAulas = prof.turmas.reduce((s, t) => s + t.dias.reduce((sd, d) => sd + (d.valorFinalPorAula > 0 ? 1 : 0), 0), 0);
+                            const media = totalAulas > 0 ? prof.totalGeralNoMes / totalAulas : 0;
+                            return <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 1 }}>{fmt(media)}/aula médio</div>;
+                        })()}
                     </div>
                     <button
                         className="btn btn-outline btn-sm"
