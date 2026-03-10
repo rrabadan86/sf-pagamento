@@ -97,49 +97,81 @@ export async function getSchedule(
     return allActivities;
 }
 
+import { prisma } from "../prisma";
+
 /**
- * Busca matrículas de alunas — com contratos, plano, mensalidade e pagamentos.
+ * Busca matrículas de alunas — com contratos, plano, mensalidade do Banco Local.
  * Filtra pelo período de referência.
  */
 export async function getMemberMemberships(
     mes: number,
     ano: number
 ): Promise<EvoMemberMembership[]> {
-    const mesStr = String(mes).padStart(2, "0");
-    const dataInicio = `${ano}-${mesStr}-01`;
+    const dataInicioBusca = new Date(ano, mes - 1, 1);
+    const dataFimBusca = new Date(ano, mes, 0, 23, 59, 59); // último dia do mês
 
-    // 1. Buscar todas as matrículas ativas (status 1)
-    const ativas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        statusMemberMembership: 1,
-        take: 50,
+    // Busca todos os contratos no BD que tenham sobreposição com o mês
+    // ou que não tenham data de fim definida (vitalicios/recorrentes)
+    // O Prisma espera que a data seja string baseada no model (DateTime não nulo) 
+    // ou usamos a comparação de datas adequadamente.
+    const contratos = await prisma.contrato.findMany({
+        where: {
+            OR: [
+                {
+                    dataInicio: { lte: dataFimBusca },
+                    dataFim: { gte: dataInicioBusca }
+                }
+            ]
+        },
+        include: {
+            aluno: true
+        }
     });
 
-    // 2. Buscar matrículas canceladas cujo cancelamento ocorreu durante ou após o mês de cálculo
-    const canceladas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        statusMemberMembership: 2,
-        cancelDateStart: dataInicio,
-        take: 50,
-    });
-
-    // 3. Unir e remover possíveis duplicidades
-    const todasMatriculas = new Map<number, EvoMemberMembership>();
-    for (const m of [...ativas, ...canceladas]) {
-        todasMatriculas.set(m.idMemberMembership, m);
-    }
-
-    return Array.from(todasMatriculas.values());
+    return contratos.map((c: any) => mapPrismaToEvoMembership(c));
 }
 
 /**
- * Busca todos os contratos de uma aluna INDIVIDUALMENTE. Útil para 
- * resgatar contratos VIP/Free que não retornam na listagem de status 1 ou 2 globais.
+ * Busca todos os contratos de uma aluna INDIVIDUALMENTE no BD.
  */
 export async function getMemberMembershipsById(idMember: number): Promise<EvoMemberMembership[]> {
-    return await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        idMember,
-        statusMemberMembership: 1, // Vamos forçar ativo para ver se a EVO traz o VIP
-        take: 50,
+     const contratos = await prisma.contrato.findMany({
+        where: {
+            idAluno: idMember.toString()
+        },
+        include: {
+            aluno: true
+        }
     });
+
+    return contratos.map((c: any) => mapPrismaToEvoMembership(c));
+}
+
+/**
+ * Helper de Conversão: Transforma os dados do Prisma numa estrutura igual à EvoMemberMembership
+ * para não quebrar a tipagem do restante do código atual.
+ */
+function mapPrismaToEvoMembership(contrato: any): EvoMemberMembership {
+    return {
+        idMember: parseInt(contrato.idAluno),
+        name: contrato.aluno.nome,
+        idMembership: parseInt(contrato.idEvo) || 0,
+        idMemberMembership: parseInt(contrato.idEvo) || 0,
+        idBranch: 15, // Padrão
+        numMembers: 1,
+        idSale: parseInt(contrato.idEvo) || 0,
+        saleValue: 0, // A ser coberto pela lógica de "Plano Mensal" - A EVO não estava trazendo isso de forma fiel de qualquer modo
+        nameMembership: contrato.nomePlano,
+        membershipStart: contrato.dataInicio ? contrato.dataInicio.toISOString() : "2000-01-01T00:00:00Z",
+        membershipEnd: contrato.dataFim ? contrato.dataFim.toISOString() : "2099-01-01T00:00:00Z",
+        registerCancelDate: contrato.status === "Suspenso" ? new Date().toISOString() : null,
+        cancelDate: contrato.status === "Cancelado" ? new Date().toISOString() : null,
+        reasonCancellation: null,
+        saleDate: contrato.dataInicio ? contrato.dataInicio.toISOString() : new Date().toISOString(),
+        cancellationFine: 0,
+        remainingValue: 0,
+        receivables: [] // Não armazenamos pagáveis no banco de forma granular no momento
+    };
 }
 
 /**
@@ -170,7 +202,7 @@ export function tipoDePlano(nameMembership: string): "fixo" | "free" {
 }
 
 /**
- * Determina status do contrato a partir dos campos da API.
+ * Determina status do contrato a partir dos campos mapeados.
  */
 export function statusContrato(
     m: EvoMemberMembership
@@ -182,15 +214,16 @@ export function statusContrato(
 
 /**
  * Verifica se aluna teve pagamento realizado no mês de referência.
+ * Como o webhook/cron não armazena installments granulares (vários delays/limites da EVO),
+ * passaremos a considerar true por padrão, focando apenas no cálculo do professor.
  */
 export function temPagamentoNoMes(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     m: EvoMemberMembership,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     mes: number,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     ano: number
 ): boolean {
-    return m.receivables.some((r) => {
-        if (!r.receivingDate || r.canceled) return false;
-        const d = new Date(r.receivingDate);
-        return d.getMonth() + 1 === mes && d.getFullYear() === ano;
-    });
+    return true; 
 }

@@ -9,10 +9,10 @@ datasource db {
 }
 
 model GestorUser {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  senha     String
-  nome      String
+  id       Int      @id @default(autoincrement())
+  email    String   @unique
+  senha    String
+  nome     String
   criadoEm DateTime @default(now())
 }
 
@@ -49,4 +49,54 @@ model AcademiaConfig {
   nomeAcademia String   @default("Academia")
   logoBase64   String?
   atualizadoEm DateTime @updatedAt
+}
+
+model Aluno {
+  idEvo        String     @id
+  nome         String
+  email        String?
+  celular      String?
+  contratos    Contrato[]
+  checkins     Checkin[]
+  criadoEm     DateTime   @default(now())
+  atualizadoEm DateTime   @updatedAt
+}
+
+model Contrato {
+  idEvo        String   @id
+  idAluno      String
+  nomePlano    String
+  status       String // Ativo, Cancelado, Trancado, etc.
+  dataInicio   DateTime
+  dataFim      DateTime
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  aluno Aluno @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
+
+  @@index([idAluno])
+}
+
+model Aula {
+  idEvo          String    @id
+  idProfessorEvo String
+  horarioInicio  DateTime
+  horarioFim     DateTime
+  atividade      String?
+  nomeProfessor  String?
+  checkins       Checkin[]
+}
+
+model Checkin {
+  idEvo    String   @id
+  idAluno  String
+  idAula   String?
+  dataHora DateTime
+  status   String // Presente, Faltou, etc.
+
+  aluno Aluno @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
+  aula  Aula? @relation(fields: [idAula], references: [idEvo], onDelete: SetNull)
+
+  @@index([idAluno, dataHora])
+  @@index([idAula])
 }

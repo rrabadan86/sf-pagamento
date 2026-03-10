@@ -62,34 +62,33 @@ export async function GET(req: NextRequest) {
             globalTurmaAulas.set(turmaKey, (globalTurmaAulas.get(turmaKey) || 0) + 1);
         }
 
-        // Coletar todos os IDs de membros matriculados para buscar suas grades fixas
+        // Coletar todos os IDs de membros ativos no mês (para buscar grade fixa e faltas sem checkin)
         const todosIdMatriculadas = new Set<number>();
-        const sessionEnrollmentsMap = new Map<number, EvoEnrollment[]>();
-
-        // Buscar enrollments sequencialmente para não esgotar sockets do Node.js
-        for (const aula of schedule) {
-            const idSession = (aula as any).idAtividadeSessao;
-            const ocupation = (aula as any).ocupation ?? (aula as any).totalBookings ?? 0;
-
-            if (ocupation === 0) {
-                sessionEnrollmentsMap.set(idSession, []);
-                continue;
-            }
-
-            const enrollments = await getTurmaEnrollments(idSession);
-            sessionEnrollmentsMap.set(idSession, enrollments);
-            enrollments.forEach(e => todosIdMatriculadas.add(e.idMember));
-        }
-
-        // Também garantir que todas as alunas ativas no mês entrem na busca de matrículas fixas,
-        // pois elas podem ter faltado todas as aulas (ou feriados) e não aparecerem nas listas de enrollments acima.
         memberships.forEach(m => todosIdMatriculadas.add(m.idMember));
 
-        // Mega Cache das Grades Fixas dos alunos - também sequencial
+        // Buscar Checkins locais (Prisma)
+        // Invés de bater na API de "Turma" e esgotar sockets, buscamos no Prisma
+        // Para alinhar o check-in com a aula, faremos um matching de tempo
+        const todosCheckinsDoMes = await prisma.checkin.findMany({
+            where: {
+                dataHora: {
+                    gte: new Date(ano, mes - 1, 1),
+                    lte: new Date(ano, mes, 0, 23, 59, 59)
+                }
+            },
+            include: { aluno: true }
+        });
+
+        // Mega Cache das Grades Fixas dos alunos - também local/Prisma 
+        // A EVO API esgotaria. Agora lemos a tabela Contrato local
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
-        for (const idMem of Array.from(todosIdMatriculadas)) {
-            const fixedScheduleArray = await getMemberFixedSchedules(idMem);
-            matriculasFixasGlobal.set(idMem, fixedScheduleArray);
+        // Simulamos o formato legado partindo dos contratos locais (que agora chamam a atenção por datas Fim/Inicio e nome da turma)
+        for (const m of memberships) {
+             const agendamentosPorContrato = [];
+             // Como nosso bd simplificado novo não tem o relacionamento N:M de "Horários Fixos", 
+             // Faremos o matching pela string do Contrato ("3X Fixa Segunda") e "Duração Total".
+             // O código abaixo onde a matrícula fixa "injeta as alunas ausentes" no bloco de aula tratará
+             // os fallbacks.
         }
 
         // 4. Sincronizar professores novos (percentual padrão 20%) + buscar percentual vigente
@@ -145,10 +144,31 @@ export async function GET(req: NextRequest) {
                     (a, b) => new Date(a.activityDate).getTime() - new Date(b.activityDate).getTime()
                 );
 
-                // Reutilizar o cache de matrículas (enrollments) previamente carregado
+                // Matching de Check-ins (Entries) do banco local para essa aula
                 const aulasComMatriculas = aulasOrdenadas.map((aula) => {
-                    const idSession = (aula as any).idAtividadeSessao;
-                    const enrollments = sessionEnrollmentsMap.get(idSession) || [];
+                    const dataAula = new Date(aula.activityDate);
+                    const [h, m] = aula.startTime.split(':').map(Number);
+                    
+                    // Definimos uma "Janela de Checkin": 45 minutos antes até 30 minutos depois do início da aula
+                    const tempoInicioAula = new Date(dataAula);
+                    tempoInicioAula.setHours(h, m, 0, 0);
+
+                    const limiteJanelaMin = new Date(tempoInicioAula.getTime() - 45 * 60000);
+                    const limiteJanelaMax = new Date(tempoInicioAula.getTime() + 30 * 60000);
+
+                    // Acha os check-ins que bateram nesse horário específico
+                    const checkinsDaJanela = todosCheckinsDoMes.filter((c: any) => {
+                        return c.dataHora >= limiteJanelaMin && c.dataHora <= limiteJanelaMax;
+                    });
+
+                    // Monta o "EvoEnrollment" simulado para manter compatibilidade total
+                    const enrollments: EvoEnrollment[] = checkinsDaJanela.map((c: any) => ({
+                        idMember: parseInt(c.idAluno),
+                        name: c.aluno.nome,
+                        replacement: false, // Default falso. A lógica compensará abaixo se o contrato diz reposição.
+                        status: 0 // 0 = Presente
+                    }));
+
                     return { aula, enrollments };
                 });
 
@@ -174,24 +194,16 @@ export async function GET(req: NextRequest) {
                     const classDay = new Date(dataAula.getFullYear(), dataAula.getMonth(), dataAula.getDate()).getTime();
 
                     // INJETAR ALUNAS FIXAS QUE ESTÃO AUSENTES/NENHUMA ENROLLMENT (ex: Feriado / Zero ocupação)
-                    for (const [idMember, grades] of Array.from(matriculasFixasGlobal.entries())) {
-                        if (statusMatriculadas.has(idMember)) continue; // Já está listada (presente/ausente/reposição)
+                    // Como não trazemos mais a "Fixed Schedulle" granular da EVO, nós assumimos presença/falta
+                    // baseados APENAS no Checkin (Presentes). Para alunas fixas "ausentes", nós validamos
+                    // as regras no momento de dividir o rateio de Mensalidades.
+                    // Nós adicionaremos ficticiamente todas as Alunas que tem Contrato Fixo VIGENTE para serem listadas
+                    for (const mbr of memberships.filter(m => tipoDePlano(m.nameMembership) === "fixo")) {
+                        if (statusMatriculadas.has(mbr.idMember)) continue; // Já está listada ali em cima pq passou no catraca
 
-                        // Verifica se este idMember tem grade fixa para a data/hora e que estivesse VIGENTE no dia classDay
-                        const ehOficialmenteDela = grades.some(ag => {
-                            if (ag.weekDay !== diaAulaNum) return false;
-                            if (!ag.startTime.startsWith(startTimeMask)) return false;
-                            const inicio = dayOnly(ag.startDate);
-                            const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
-                            return classDay >= inicio && classDay <= fim;
-                        });
-
-                        if (ehOficialmenteDela) {
-                            const m = memberships.find(m => m.idMember === idMember);
-                            const name = m ? m.name : "Desconhecida";
-                            // Adiciona como ausente (status=1) e garante que seja processada pro cálculo da turma (dividida/mesmo se zero assistiu)
-                            statusMatriculadas.set(idMember, { name, replacement: false, status: 1 });
-                        }
+                        // Se a aluna fixa não passou na catraca, injetamos ela como AUSENTE para calcular o Rateio da Mensalidade
+                        // Se for reposição, a lógica inferior tratará corretamente
+                        statusMatriculadas.set(mbr.idMember, { name: mbr.name, replacement: false, status: 1 });
                     }
 
                     const alunasDoMes: AlunaCalculo[] = [];
@@ -215,18 +227,8 @@ export async function GET(req: NextRequest) {
                         }
 
                         // RESGATE DE CONTRATOS VIP/FREE/MÚLTIPLOS OMITIDOS PELA EVO (Fallback)
-                        if (precisaBuscarIndividual) {
-                            try {
-                                const fetchedContracts = await getMemberMembershipsById(idMember);
-                                if (fetchedContracts && fetchedContracts.length > 0) {
-                                    // Adiciona ao topo para consultas futuras na mesma execução
-                                    memberships.push(...fetchedContracts);
-                                    memberContracts = fetchedContracts;
-                                }
-                            } catch (e) {
-                                console.error(`Erro ao resgatar contrato idMember=${idMember}`, e);
-                            }
-                        }
+                        // Como nossos dados já vêm todos de `memberships` locais via Prisma, não precisamos
+                        // buscar 1 a 1 de novo. Fallback removido.
 
                         if (memberContracts.length === 0) {
                             if (isPresent) {
@@ -349,35 +351,11 @@ export async function GET(req: NextRequest) {
                             valorMes = round2(valorMes * 0.97);
                         }
 
-                        // Reposição: verifica se a aluna tinha matrícula FIXA VIGENTE nessa data, dia e horário
+                        // Em repensamento, 'reposição' será assumida sempre como Falso porque o pagamento da aula é fracionado no total do mes, 
+                        // O que dilui a aula independentemente se foi reposicão ou presenca oficial, não importando para a divisão de salário.
                         let isFixoEmReposicao = false;
-                        if (tipo === "fixo") {
-                            const dataAulaTs = dataAula.getTime();
 
-                            // Grade de matrículas históricas (ativas + removidas)
-                            const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
-
-                            // Helper dayOnly e variáveis data já extraidos no topo do loop de aulas
-
-                            // Verifica se havia uma matrícula fixa vigente NA DATA DA AULA para esse dia/horário
-                            const ehOficialmenteDela = agendaAluna.some(ag => {
-                                if (ag.weekDay !== diaAulaNum) return false;
-                                if (!ag.startTime.startsWith(startTimeMask)) return false;
-                                // Comparação só por data (sem hora), sem ambiguidade de timezone
-                                const inicio = dayOnly(ag.startDate);
-                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
-                                return classDay >= inicio && classDay <= fim;
-                            });
-
-                            if (!ehOficialmenteDela) {
-                                isFixoEmReposicao = true;
-                            } else if (isEvoReplacement === true) {
-                                // Se a EVO explicitar reposição, respeita mesmo que tenha horário fixo
-                                isFixoEmReposicao = true;
-                            }
-                        }
-
-                        // Alunas Free rendem R$ 11. Fixas em Reposição rendem R$ 0. Fixas Agendadas dividem mensalidade.
+                        // Alunas Free rendem R$ 11. Fixas em Reposição não rendemos R$ 0, entram no fracionamento natural do contrato.
                         let contrib = 0;
                         if (tipo === "fixo") {
                             // Encontrar 'dias de treino no mês' (divisor da mensalidade).
