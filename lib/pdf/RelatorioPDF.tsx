@@ -277,7 +277,7 @@ export function RelatorioPDF({
                     });
 
                     const rows = Array.from(matriz.keys()).sort();
-                    const colW = 55;
+                    const colW = 65;
                     const hW = 40;
 
                     return (
@@ -301,7 +301,7 @@ export function RelatorioPDF({
                                         return (
                                             <View key={col} style={{ width: colW, alignItems: "center" }}>
                                                 <View style={{ backgroundColor: "#eff6ff", borderRadius: 3, padding: "4 6", alignItems: "center" }}>
-                                                    <Text style={{ fontSize: 7, fontFamily: "Helvetica-Bold", color: "#3b82f6" }}>{fmt(media)}/aula</Text>
+                                                    <Text style={{ fontSize: 6.5, fontFamily: "Helvetica-Bold", color: "#3b82f6" }}>{fmt(media)}/aula</Text>
                                                     <Text style={{ fontSize: 6, color: "#64748b", marginTop: 1 }}>{fmt(cell.totalMes)}</Text>
                                                 </View>
                                             </View>

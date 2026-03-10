@@ -40,6 +40,7 @@ export async function getMemberFixedSchedules(idMember: number): Promise<EvoFixe
         if (Array.isArray(res)) return res as EvoFixedSchedule[];
         return [];
     } catch (err) {
+        console.error(`Erro ao buscar schedule fixo (member-enrollment) idMember=${idMember}`, err);
         return [];
     }
 }

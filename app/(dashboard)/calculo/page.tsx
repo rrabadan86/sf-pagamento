@@ -575,6 +575,7 @@ export default function CalculoPage() {
     const [erro, setErro] = useState("");
     const [toast, setToast] = useState("");
     const [horariosOcultos, setHorariosOcultos] = useState<Set<string>>(new Set());
+    const [diaFiltro, setDiaFiltro] = useState<string>("Todos");
 
     const showToast = (msg: string) => {
         setToast(msg);
@@ -759,18 +760,29 @@ export default function CalculoPage() {
 
     const anos = Array.from({ length: 3 }, (_, i) => now.getFullYear() - i);
 
-    // Derivar resultado filtrado (exclui turmas de seg-sex cujo horário foi removido na Matriz)
+    // Derivar resultado filtrado (exclui turmas de seg-sex cujo horário foi removido na Matriz e filtra por Dia da Semana)
     // Sábado NUNCA é filtrado pela matriz (que só exibe seg-sex), para não sumir da listagem.
     const resultadoFiltrado = resultado ? {
         professores: resultado.professores.map(p => {
-            const turmasFiltradas = p.turmas.filter(t => {
+            const turmasFiltradas = p.turmas.map(t => {
+                // Filtra os dias de cada turma se um dia específico foi selecionado
+                if (diaFiltro !== "Todos") {
+                    const diasFiltrados = t.dias.filter(d => d.diaDaSemana.includes(diaFiltro));
+                    const totalTurmaFiltrado = Number(diasFiltrados.reduce((s, d) => s + d.totalDiaNoMes, 0).toFixed(2));
+                    return { ...t, dias: diasFiltrados, totalTurmaNoMes: totalTurmaFiltrado };
+                }
+                return t;
+            }).filter(t => {
+                // Remove a turma inteira se não sobrou nenhum dia após o filtro
+                if (t.dias.length === 0) return false;
+
                 const isSabadoTurma = t.diasDaSemana.every(d => d.includes("Sábado"));
-                if (isSabadoTurma) return true; // sábado nunca oculta
+                if (isSabadoTurma) return true; // sábado nunca oculta da matriz
                 return !horariosOcultos.has(extrairHorario(t.nomeAtividade));
             });
             const totalFiltrado = Number(turmasFiltradas.reduce((s, t) => s + t.totalTurmaNoMes, 0).toFixed(2));
             return { ...p, turmas: turmasFiltradas, totalGeralNoMes: totalFiltrado };
-        })
+        }).filter(p => p.turmas.length > 0)
     } : null;
 
     const ocultarHorario = useCallback((h: string) => {
@@ -805,6 +817,20 @@ export default function CalculoPage() {
                             {anos.map(a => <option key={a} value={a}>{a}</option>)}
                         </select>
                     </div>
+                    {resultado && (
+                        <div className="form-group" style={{ flex: "0 0 auto" }}>
+                            <label>Dia da Semana (Filtro)</label>
+                            <select value={diaFiltro} onChange={e => setDiaFiltro(e.target.value)} style={{ width: 160 }}>
+                                <option value="Todos">Todos</option>
+                                <option value="Segunda">Segunda-feira</option>
+                                <option value="Terça">Terça-feira</option>
+                                <option value="Quarta">Quarta-feira</option>
+                                <option value="Quinta">Quinta-feira</option>
+                                <option value="Sexta">Sexta-feira</option>
+                                <option value="Sábado">Sábado</option>
+                            </select>
+                        </div>
+                    )}
                     <div style={{ flex: "0 0 auto", marginTop: 18 }}>
                         <button className="btn btn-primary" onClick={calcular} disabled={loading}>
                             {loading ? (

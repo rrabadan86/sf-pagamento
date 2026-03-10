@@ -49,6 +49,17 @@ async function rateLimitedFetch(
                     ...(options.headers as Record<string, string>),
                 },
             });
+
+            if (response.status === 429 || response.status >= 500) {
+                const text = await response.text().catch(() => "");
+                console.warn(`[EVO API] Status ${response.status} on attempt ${attempt}/3 (${url}). Retrying...`);
+                if (attempt < 3) {
+                    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+                    continue;
+                }
+                throw new Error(`EVO API erro ${response.status} permanente após 3 tentativas: ${text}`);
+            }
+
             return response;
         } catch (error: any) {
             lastError = error;
@@ -56,8 +67,10 @@ async function rateLimitedFetch(
             // fecha abruptamente a conexão TCP antes da resposta HTTP no nível Node.js
             if (error.message?.includes('terminated') || error.code === 'UND_ERR_SOCKET') {
                 console.warn(`[EVO API] Socket terminated on attempt ${attempt}/3. Retrying...`);
-                await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-                continue;
+                if (attempt < 3) {
+                    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+                    continue;
+                }
             }
             throw error; // Lança imediatamente se for outro tipo de erro de rede
         }
