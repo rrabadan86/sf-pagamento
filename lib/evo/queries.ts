@@ -23,7 +23,7 @@ export interface EvoMemberMembership {
     idMember: number;
     name: string;
     idMembership: number;
-    idMemberMemberShip: number;
+    idMemberMembership: number;
     idBranch: number;
     numMembers: number;
     idSale: number;
@@ -124,7 +124,7 @@ export async function getMemberMemberships(
     // 3. Unir e remover possíveis duplicidades
     const todasMatriculas = new Map<number, EvoMemberMembership>();
     for (const m of [...ativas, ...canceladas]) {
-        todasMatriculas.set(m.idMemberMemberShip, m);
+        todasMatriculas.set(m.idMemberMembership, m);
     }
 
     return Array.from(todasMatriculas.values());

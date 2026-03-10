@@ -8,8 +8,11 @@ import { calcularDiaDaSemana, contribuicaoFixa, CONTRIBUICAO_FREE, round2, conta
 export const maxDuration = 120;
 
 export async function GET(req: NextRequest) {
+    // ---- AUTENTICAÇÃO ----
     const session = await getServerSession();
-    if (!session) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+    if (!session) {
+        return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+    }
 
     const { searchParams } = new URL(req.url);
     const mes = parseInt(searchParams.get("mes") ?? "0");
@@ -77,6 +80,10 @@ export async function GET(req: NextRequest) {
             sessionEnrollmentsMap.set(idSession, enrollments);
             enrollments.forEach(e => todosIdMatriculadas.add(e.idMember));
         }
+
+        // Também garantir que todas as alunas ativas no mês entrem na busca de matrículas fixas,
+        // pois elas podem ter faltado todas as aulas (ou feriados) e não aparecerem nas listas de enrollments acima.
+        memberships.forEach(m => todosIdMatriculadas.add(m.idMember));
 
         // Mega Cache das Grades Fixas dos alunos - também sequencial
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
@@ -155,6 +162,38 @@ export async function GET(req: NextRequest) {
 
                     const statusMatriculadas = new Map<number, { name: string, replacement: boolean; status: number }>();
                     enrollments.forEach(e => statusMatriculadas.set(e.idMember, { name: e.name, replacement: e.replacement, status: e.status }));
+
+                    const diaAulaNum = dataAula.getDay();
+                    const startTimeMask = aula.startTime.substring(0, 5); // ex: "08:30"
+
+                    // Helper: compara apenas a data (YYYY-MM-DD), ignorando hora/timezone.
+                    const dayOnly = (dateStr: string) => {
+                        const [y, mo, d] = dateStr.substring(0, 10).split('-').map(Number);
+                        return new Date(y, mo - 1, d).getTime(); // local midnight
+                    };
+                    const classDay = new Date(dataAula.getFullYear(), dataAula.getMonth(), dataAula.getDate()).getTime();
+
+                    // INJETAR ALUNAS FIXAS QUE ESTÃO AUSENTES/NENHUMA ENROLLMENT (ex: Feriado / Zero ocupação)
+                    for (const [idMember, grades] of Array.from(matriculasFixasGlobal.entries())) {
+                        if (statusMatriculadas.has(idMember)) continue; // Já está listada (presente/ausente/reposição)
+
+                        // Verifica se este idMember tem grade fixa para a data/hora e que estivesse VIGENTE no dia classDay
+                        const ehOficialmenteDela = grades.some(ag => {
+                            if (ag.weekDay !== diaAulaNum) return false;
+                            if (!ag.startTime.startsWith(startTimeMask)) return false;
+                            const inicio = dayOnly(ag.startDate);
+                            const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                            return classDay >= inicio && classDay <= fim;
+                        });
+
+                        if (ehOficialmenteDela) {
+                            const m = memberships.find(m => m.idMember === idMember);
+                            const name = m ? m.name : "Desconhecida";
+                            // Adiciona como ausente (status=1) e garante que seja processada pro cálculo da turma (dividida/mesmo se zero assistiu)
+                            statusMatriculadas.set(idMember, { name, replacement: false, status: 1 });
+                        }
+                    }
+
                     const alunasDoMes: AlunaCalculo[] = [];
                     // Validar usando a data exata da aula em questão:
                     const calcDate = new Date(ano, mes - 1, dataAula.getDate());
@@ -263,23 +302,43 @@ export async function GET(req: NextRequest) {
 
                         // Valor mensal
                         let valorMes = m.saleValue;
+                        const nameLower = (m.nameMembership || "").toLowerCase();
 
-                        if (m.membershipStart && m.membershipEnd) {
-                            // Prioridade: dividir pelo número de meses de vigência do contrato.
-                            // Isso é mais confiável que totalInstallments, que pode refletir
-                            // recebíveis antecipados ou renegociados ao invés do prazo real.
-                            const start = new Date(m.membershipStart);
-                            const end = new Date(m.membershipEnd);
-                            let months =
-                                (end.getFullYear() - start.getFullYear()) * 12 +
-                                (end.getMonth() - start.getMonth());
-                            if (months <= 0) months = 1;
-                            if (months > 1 && months <= 24) valorMes = m.saleValue / months;
+                        // Prioridade 1: Extrair a duração explicitamente do nome do contrato
+                        let explicitMonths = 0;
+                        if (nameLower.includes("anual")) explicitMonths = 12;
+                        else if (nameLower.includes("semestral")) explicitMonths = 6;
+                        else if (nameLower.includes("trimestral")) explicitMonths = 3;
+                        else if (nameLower.includes("bimestral")) explicitMonths = 2;
+                        else if (nameLower.includes("mensal")) explicitMonths = 1;
+
+                        if (explicitMonths > 0) {
+                            valorMes = m.saleValue / explicitMonths;
                         } else {
-                            // Fallback: usar totalInstallments se não houver datas de vigência
-                            const r = m.receivables.find((rec) => !rec.canceled && rec.totalInstallments > 0);
-                            if (r && r.totalInstallments > 1 && r.totalInstallments <= 12) {
-                                valorMes = m.saleValue / r.totalInstallments;
+                            // Regra a partir do 2º semestre de 2025: Se não houver nome explícito, o padrão é dividir por 12
+                            if (m.membershipStart) {
+                                const startDate = new Date(m.membershipStart);
+                                const startYear = startDate.getFullYear();
+                                const startMonth = startDate.getMonth(); // 0-11 (6 = Julho)
+
+                                if (startYear >= 2026 || (startYear === 2025 && startMonth >= 6)) {
+                                    valorMes = m.saleValue / 12;
+                                } else if (m.membershipEnd) {
+                                    // Fallback antigo: matemática de datas para contratos pré-2026 sem nome
+                                    const start = new Date(m.membershipStart);
+                                    const end = new Date(m.membershipEnd);
+                                    let months =
+                                        (end.getFullYear() - start.getFullYear()) * 12 +
+                                        (end.getMonth() - start.getMonth());
+                                    if (months <= 0) months = 1;
+                                    if (months > 1 && months <= 24) valorMes = m.saleValue / months;
+                                }
+                            } else {
+                                // Fallback: usar totalInstallments se não houver datas de vigência
+                                const r = m.receivables?.find((rec) => !rec.canceled && rec.totalInstallments > 0);
+                                if (r && r.totalInstallments > 1 && r.totalInstallments <= 12) {
+                                    valorMes = m.saleValue / r.totalInstallments;
+                                }
                             }
                         }
 
@@ -289,24 +348,16 @@ export async function GET(req: NextRequest) {
                         if (tipo === "fixo") {
                             valorMes = round2(valorMes * 0.97);
                         }
+
                         // Reposição: verifica se a aluna tinha matrícula FIXA VIGENTE nessa data, dia e horário
                         let isFixoEmReposicao = false;
                         if (tipo === "fixo") {
-                            const diaAulaNum = dataAula.getDay();
-                            const startTimeMask = aula.startTime.substring(0, 5); // ex: "08:30"
                             const dataAulaTs = dataAula.getTime();
 
                             // Grade de matrículas históricas (ativas + removidas)
                             const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
 
-                            // Helper: compara apenas a data (YYYY-MM-DD), ignorando hora/timezone.
-                            // O EVO armazena startDate/endDate em UTC-3, mas JS interpreta sem timezone como UTC.
-                            // Sem isso, "2026-02-25T03:00:00" (meia-noite BRT) < "2026-02-25T00:00:00" (meia-noite UTC) → bug.
-                            const dayOnly = (dateStr: string) => {
-                                const [y, mo, d] = dateStr.substring(0, 10).split('-').map(Number);
-                                return new Date(y, mo - 1, d).getTime(); // local midnight
-                            };
-                            const classDay = new Date(dataAula.getFullYear(), dataAula.getMonth(), dataAula.getDate()).getTime();
+                            // Helper dayOnly e variáveis data já extraidos no topo do loop de aulas
 
                             // Verifica se havia uma matrícula fixa vigente NA DATA DA AULA para esse dia/horário
                             const ehOficialmenteDela = agendaAluna.some(ag => {
@@ -386,6 +437,7 @@ export async function GET(req: NextRequest) {
                             mensalidade: valorMes,
                             pagouNoMes: temPagamentoNoMes(m, mes, ano),
                             contribuicaoPorAula: contrib,
+                            dataFimContrato: m.membershipEnd || null,
                         });
                     }
 
@@ -396,6 +448,8 @@ export async function GET(req: NextRequest) {
                     const alunasDiaList = alunasDoMes.slice(0, 9);
                     const isSabado = dataAula.getDay() === 6;
 
+                    // Se a alunasDiaList for VAZIA (nenhuma aluna, ou todas faltaram), nós ainda precisamos calcular o Piso! 
+                    // O calcularDiaDaSemana zera quando o array é vazio (pois não tem 'contribuicao'), mas deve garantir o piso mínimo.
                     const diaCalc = calcularDiaDaSemana({
                         diaDaSemana: diaDesc,
                         totalAulasNoDia: 1, // Exatamente 1 aula nesta sessão
@@ -403,6 +457,14 @@ export async function GET(req: NextRequest) {
                         piso: (percRecord as any)?.piso ?? 55,
                         teto: (percRecord as any)?.teto ?? 90,
                     });
+
+                    // Correção: Se a aula tem ocupação 0, a professora estava lá e o piso TEM que ser aplicado.
+                    if (alunasDiaList.length === 0) {
+                        const pisoAtivo = (percRecord as any)?.piso ?? 55;
+                        diaCalc.valorFinalPorAula = pisoAtivo;
+                        diaCalc.totalDiaNoMes = pisoAtivo;
+                        diaCalc.pisoAplicado = true;
+                    }
 
                     // REGRA DO SÁBADO (DIÁRIA GLOBAL)
                     // Se for Sábado, a professora tem garantidos R$ 70,00 naquele dia.

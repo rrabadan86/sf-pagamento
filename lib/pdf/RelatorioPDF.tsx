@@ -66,6 +66,7 @@ interface AlunaCalculo {
     mensalidade: number;
     pagouNoMes: boolean;
     contribuicaoPorAula: number;
+    dataFimContrato: string | null;
 }
 
 interface ResultadoDiaDaSemana {
@@ -183,6 +184,68 @@ export function RelatorioPDF({
                     )}
                 </View>
 
+                {/* CONTRATOS A VENCER NO PRÓXIMO MÊS */}
+                {(() => {
+                    const targetMonth = mes === 12 ? 1 : mes + 1;
+                    const targetYear = mes === 12 ? ano + 1 : ano;
+
+                    // Extract unique students that took classes with this professor
+                    const uniqueAlunas = new Map<number, AlunaCalculo>();
+                    professor.turmas.forEach(t => {
+                        t.dias.forEach(d => {
+                            d.alunas.forEach(a => {
+                                if (!uniqueAlunas.has(a.idMember)) {
+                                    uniqueAlunas.set(a.idMember, a);
+                                }
+                            });
+                        });
+                    });
+
+                    // Filter for those expiring in the target month
+                    const expiringAlunas = Array.from(uniqueAlunas.values()).filter(a => {
+                        if (!a.dataFimContrato) return false;
+                        const endDate = new Date(a.dataFimContrato);
+                        return endDate.getMonth() + 1 === targetMonth && endDate.getFullYear() === targetYear;
+                    });
+
+                    if (expiringAlunas.length === 0) return null;
+
+                    const expiringFixo = expiringAlunas.filter(a => a.tipo === "fixo");
+                    const expiringFree = expiringAlunas.filter(a => a.tipo === "free");
+
+                    const renderList = (title: string, list: AlunaCalculo[]) => {
+                        if (list.length === 0) return null;
+                        return (
+                            <View style={{ marginBottom: 12 }}>
+                                <Text style={{ fontSize: 8, fontFamily: "Helvetica-Bold", color: "#64748b", marginBottom: 4, textTransform: "uppercase" }}>{title}</Text>
+                                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                                    {list.map(a => {
+                                        const dt = new Date(a.dataFimContrato!).toLocaleDateString("pt-BR");
+                                        return (
+                                            <View key={a.idMember} style={{ backgroundColor: "#f8fafc", border: "1 solid #e2e8f0", padding: "4 8", borderRadius: 4 }}>
+                                                <Text style={{ fontSize: 8, fontFamily: "Helvetica-Bold", color: "#1e293b" }}>{a.nome}</Text>
+                                                <Text style={{ fontSize: 7, color: "#ef4444", marginTop: 1 }}>Vence em {dt}</Text>
+                                            </View>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+                        );
+                    };
+
+                    const targetMonthName = MESES[targetMonth - 1];
+
+                    return (
+                        <View style={{ marginBottom: 20, padding: 12, backgroundColor: "#fff1f2", border: "1 solid #fecdd3", borderRadius: 6 }}>
+                            <Text style={[s.sectionTitle, { marginTop: 0, color: "#9f1239", marginBottom: 12 }]}>
+                                ⚠️ Contratos a Vencer no Próximo Mês ({targetMonthName} {targetYear})
+                            </Text>
+                            {renderList("Alunas Fixas", expiringFixo)}
+                            {renderList("Alunas Free (Fizeram aula com a professora neste mês)", expiringFree)}
+                        </View>
+                    );
+                })()}
+
                 {/* MATRIZ DE HORÁRIOS */}
                 {(() => {
                     const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
@@ -249,6 +312,21 @@ export function RelatorioPDF({
                         </View>
                     );
                 })()}
+
+                {/* EXCLUSÕES */}
+                {professor.exclusoes && professor.exclusoes.length > 0 && (
+                    <View style={{ margin: "16 0", padding: 12, border: "1 dashed #ef4444", borderRadius: 6, backgroundColor: "#fef2f2" }}>
+                        <Text style={{ fontSize: 9, fontFamily: "Helvetica-Bold", color: "#b91c1c", marginBottom: 6 }}>
+                            Alunas Removidas Manualmente do Mês (Motivos Registrados)
+                        </Text>
+                        {professor.exclusoes.map((exc, i) => (
+                            <View key={i} style={{ flexDirection: "row", marginBottom: 3 }}>
+                                <Text style={{ fontSize: 8, fontFamily: "Helvetica-Bold", color: "#7f1d1d", width: 120 }}>{exc.aluna}</Text>
+                                <Text style={{ fontSize: 8, color: "#991b1b", flex: 1 }}>Motivo: {exc.motivo}</Text>
+                            </View>
+                        ))}
+                    </View>
+                )}
 
                 {/* RESUMO FINANCEIRO — abaixo da matriz */}
                 {(() => {
@@ -353,21 +431,6 @@ export function RelatorioPDF({
                     </View>
                     <Text style={s.totalValue}>{fmt(professor.totalGeralNoMes)}</Text>
                 </View>
-
-                {/* EXCLUSÕES */}
-                {professor.exclusoes && professor.exclusoes.length > 0 && (
-                    <View style={{ margin: "16 16 0 16", padding: 12, border: "1 dashed #ef4444", borderRadius: 6, backgroundColor: "#fef2f2" }}>
-                        <Text style={{ fontSize: 9, fontFamily: "Helvetica-Bold", color: "#b91c1c", marginBottom: 6 }}>
-                            Alunas Removidas Manualmente do Mês (Motivos Registrados)
-                        </Text>
-                        {professor.exclusoes.map((exc, i) => (
-                            <View key={i} style={{ flexDirection: "row", marginBottom: 3 }}>
-                                <Text style={{ fontSize: 8, fontFamily: "Helvetica-Bold", color: "#7f1d1d", width: 120 }}>{exc.aluna}</Text>
-                                <Text style={{ fontSize: 8, color: "#991b1b", flex: 1 }}>Motivo: {exc.motivo}</Text>
-                            </View>
-                        ))}
-                    </View>
-                )}
 
                 {/* RODAPÉ */}
                 <View style={s.footer}>

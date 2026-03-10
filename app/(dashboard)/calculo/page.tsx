@@ -10,6 +10,7 @@ interface AlunaCalculo {
     mensalidade: number;
     pagouNoMes: boolean;
     contribuicaoPorAula: number;
+    dataFimContrato: string | null;
 }
 
 interface ResultadoDiaDaSemana {

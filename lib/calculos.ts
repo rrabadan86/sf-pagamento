@@ -18,6 +18,7 @@ export interface AlunaCalculo {
     mensalidade: number; // 0 para free
     pagouNoMes: boolean;
     contribuicaoPorAula: number; // calculado
+    dataFimContrato: string | null;
 }
 
 export interface ResultadoDiaDaSemana {

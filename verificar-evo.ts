@@ -1,7 +1,7 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
-import { getSchedule } from "./lib/evo/queries.ts";
-import { getTurmaEnrollments } from "./lib/evo/enrollments.ts";
+import { getSchedule } from "./lib/evo/queries";
+import { getTurmaEnrollments } from "./lib/evo/enrollments";
 
 async function run() {
     const s = await getSchedule(2, 2026);
