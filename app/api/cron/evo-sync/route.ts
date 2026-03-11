@@ -139,57 +139,66 @@ export async function GET(request: NextRequest) {
         }
 
 
-        // Puxamos a grade fixa (dia/horário) de cada aluno ativo para evitar
-        // ~80 chamadas à EVO API no momento do cálculo mensal.
-        const alunosSalvos = await prisma.aluno.findMany({ select: { idEvo: true } });
-        const idsParaGrade = alunosSalvos.map(a => parseInt(a.idEvo)).filter(id => !isNaN(id));
-
-        // Chunks de 10 para respeitar o rate limit
-        const chunkSize = 10;
-        const chunks: number[][] = [];
-        for (let i = 0; i < idsParaGrade.length; i += chunkSize) {
-            chunks.push(idsParaGrade.slice(i, i + chunkSize));
-        }
+        // --- 3. SINCRONIZAR GRADES FIXAS DOS ALUNOS (apenas dias 1,5,10,15,20,25) ---
+        // A grade fixa muda raramente. Sincronizar 6x/mês economiza ~480 requisições,
+        // mantendo o total dentro das 1.000/mês do plano EVO Black.
+        const DIAS_COM_GRADE = [1, 5, 10, 15, 20, 25];
+        const diaDoMes = parseInt(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[2]);
+        const deveRodarGrade = DIAS_COM_GRADE.includes(diaDoMes);
 
         let countGrades = 0;
-        for (const chunk of chunks) {
-            await Promise.all(chunk.map(async (idMember) => {
-                try {
-                    const grades = await getMemberFixedSchedules(idMember);
-                    for (const g of grades) {
-                        if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
-                        await prisma.gradeFixaAluno.upsert({
-                            where: {
-                                idAluno_idActivity_weekDay_startTime: {
+        if (deveRodarGrade) {
+            console.log(`[CRON] Dia ${diaDoMes} — sincronizando grades fixas...`);
+            const alunosSalvos = await prisma.aluno.findMany({ select: { idEvo: true } });
+            const idsParaGrade = alunosSalvos.map(a => parseInt(a.idEvo)).filter(id => !isNaN(id));
+
+            const chunkSize = 10;
+            const chunks: number[][] = [];
+            for (let i = 0; i < idsParaGrade.length; i += chunkSize) {
+                chunks.push(idsParaGrade.slice(i, i + chunkSize));
+            }
+
+            for (const chunk of chunks) {
+                await Promise.all(chunk.map(async (idMember) => {
+                    try {
+                        const grades = await getMemberFixedSchedules(idMember);
+                        for (const g of grades) {
+                            if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
+                            await prisma.gradeFixaAluno.upsert({
+                                where: {
+                                    idAluno_idActivity_weekDay_startTime: {
+                                        idAluno: idMember.toString(),
+                                        idActivity: g.idActivity,
+                                        weekDay: g.weekDay,
+                                        startTime: g.startTime,
+                                    }
+                                },
+                                update: {
+                                    activityName: g.activityName || "",
+                                    status: g.status ?? 1,
+                                    startDate: new Date(g.startDate),
+                                    endDate: g.endDate ? new Date(g.endDate) : null,
+                                },
+                                create: {
                                     idAluno: idMember.toString(),
                                     idActivity: g.idActivity,
+                                    activityName: g.activityName || "",
                                     weekDay: g.weekDay,
                                     startTime: g.startTime,
+                                    status: g.status ?? 1,
+                                    startDate: new Date(g.startDate),
+                                    endDate: g.endDate ? new Date(g.endDate) : null,
                                 }
-                            },
-                            update: {
-                                activityName: g.activityName || "",
-                                status: g.status ?? 1,
-                                startDate: new Date(g.startDate),
-                                endDate: g.endDate ? new Date(g.endDate) : null,
-                            },
-                            create: {
-                                idAluno: idMember.toString(),
-                                idActivity: g.idActivity,
-                                activityName: g.activityName || "",
-                                weekDay: g.weekDay,
-                                startTime: g.startTime,
-                                status: g.status ?? 1,
-                                startDate: new Date(g.startDate),
-                                endDate: g.endDate ? new Date(g.endDate) : null,
-                            }
-                        });
-                        countGrades++;
+                            });
+                            countGrades++;
+                        }
+                    } catch (err) {
+                        console.warn(`[CRON] Erro ao buscar grade fixa do aluno ${idMember}:`, err);
                     }
-                } catch (err) {
-                    console.warn(`[CRON] Erro ao buscar grade fixa do aluno ${idMember}:`, err);
-                }
-            }));
+                }));
+            }
+        } else {
+            console.log(`[CRON] Dia ${diaDoMes} — grade fixa não agendada para hoje (próxima: dias 1,5,10,15,20,25).`);
         }
 
         console.log("=== CRON DE SINCRONIZAÇÃO CONCLUÍDO ===");
