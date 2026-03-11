@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { evoFetchPaginated } from "@/lib/evo/client";
+import { getMemberFixedSchedules } from "@/lib/evo/enrollments";
 
 // Vercel Cron Limits: Até 10s no Hobby, até 60s no Pro/Premium. Pro maxDuration: 300
 export const maxDuration = 300; 
@@ -82,7 +83,7 @@ export async function GET(request: NextRequest) {
                             nomePlano: mb.name,
                             status: mb.membershipStatus || 'active',
                             dataInicio: new Date(mb.startDate),
-                            dataFim: mb.endDate ? new Date(mb.endDate) : new Date(mb.startDate)
+                            dataFim: mb.endDate ? new Date(mb.endDate) : new Date("2099-12-31T23:59:59Z")
                         },
                         create: {
                             idEvo: mb.idMembership.toString(),
@@ -90,7 +91,7 @@ export async function GET(request: NextRequest) {
                             nomePlano: mb.name,
                             status: mb.membershipStatus || 'active',
                             dataInicio: new Date(mb.startDate),
-                            dataFim: mb.endDate ? new Date(mb.endDate) : new Date(mb.startDate)
+                            dataFim: mb.endDate ? new Date(mb.endDate) : new Date("2099-12-31T23:59:59Z")
                         }
                     });
                     countContratos++;
@@ -111,7 +112,13 @@ export async function GET(request: NextRequest) {
             const alunoExiste = await prisma.aluno.findUnique({ where: { idEvo: entry.idMember.toString() }});
             
             if (alunoExiste) {
-                const dataCheckin = new Date(entry.date);
+                // A EVO retorna datas como "2026-03-10T10:00:00" (BRT, sem sufixo Z)
+                // O JS interpreta como UTC → salva 3h antes. Corrigir com offset do timeZone.
+                const dataCheckinRaw = new Date(entry.date);
+                const offsetMs = entry.timeZone
+                    ? -(parseInt(entry.timeZone.split(':')[0]) * 60) * 60000
+                    : 3 * 60 * 60 * 1000; // fallback BRT = UTC-3
+                const dataCheckin = new Date(dataCheckinRaw.getTime() + offsetMs);
                 const idRecordCalc = `${entry.idMember}_${dataCheckin.getTime()}`;
 
                 await prisma.checkin.upsert({
@@ -131,14 +138,70 @@ export async function GET(request: NextRequest) {
             }
         }
 
+
+        // Puxamos a grade fixa (dia/horário) de cada aluno ativo para evitar
+        // ~80 chamadas à EVO API no momento do cálculo mensal.
+        const alunosSalvos = await prisma.aluno.findMany({ select: { idEvo: true } });
+        const idsParaGrade = alunosSalvos.map(a => parseInt(a.idEvo)).filter(id => !isNaN(id));
+
+        // Chunks de 10 para respeitar o rate limit
+        const chunkSize = 10;
+        const chunks: number[][] = [];
+        for (let i = 0; i < idsParaGrade.length; i += chunkSize) {
+            chunks.push(idsParaGrade.slice(i, i + chunkSize));
+        }
+
+        let countGrades = 0;
+        for (const chunk of chunks) {
+            await Promise.all(chunk.map(async (idMember) => {
+                try {
+                    const grades = await getMemberFixedSchedules(idMember);
+                    for (const g of grades) {
+                        if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
+                        await prisma.gradeFixaAluno.upsert({
+                            where: {
+                                idAluno_idActivity_weekDay_startTime: {
+                                    idAluno: idMember.toString(),
+                                    idActivity: g.idActivity,
+                                    weekDay: g.weekDay,
+                                    startTime: g.startTime,
+                                }
+                            },
+                            update: {
+                                activityName: g.activityName || "",
+                                status: g.status ?? 1,
+                                startDate: new Date(g.startDate),
+                                endDate: g.endDate ? new Date(g.endDate) : null,
+                            },
+                            create: {
+                                idAluno: idMember.toString(),
+                                idActivity: g.idActivity,
+                                activityName: g.activityName || "",
+                                weekDay: g.weekDay,
+                                startTime: g.startTime,
+                                status: g.status ?? 1,
+                                startDate: new Date(g.startDate),
+                                endDate: g.endDate ? new Date(g.endDate) : null,
+                            }
+                        });
+                        countGrades++;
+                    }
+                } catch (err) {
+                    console.warn(`[CRON] Erro ao buscar grade fixa do aluno ${idMember}:`, err);
+                }
+            }));
+        }
+
         console.log("=== CRON DE SINCRONIZAÇÃO CONCLUÍDO ===");
+
         return NextResponse.json({ 
             success: true, 
             message: `Sincronização do dia ${ontemStr} concluída.`,
             stats: {
                 alunosVerificados: countAlunos,
                 contratosAtualizados: countContratos,
-                checkinsDeOntemSalvos: countCheckins
+                checkinsDeOntemSalvos: countCheckins,
+                gradesFixasSalvas: countGrades
             }
         });
 

@@ -1,0 +1,1 @@
+import { config } from 'dotenv'; config({ path: '.env' }); import { evoFetchPaginated } from './lib/evo/client'; async function run() { try { const res = await evoFetchPaginated('/api/v3/membermembership', { statusMemberMembership: 1, take: 50 }); console.log('Items:', res.length); } catch(e) { console.error(e.message); }} run();  

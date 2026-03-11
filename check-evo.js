@@ -1,0 +1,1 @@
+import { evoFetchPaginated } from './lib/evo/client.js'; async function run() { console.log('Buscando vendas...'); const vendas = await evoFetchPaginated('/api/v1/sales', { saleDateStart: '2025-01-01', saleDateEnd: '2027-01-01' }); console.log('Vendas Retornadas:', vendas.length); } run();  

@@ -1,0 +1,1 @@
+import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient(); async function run() { const c = await prisma.contrato.findFirst({ where: { valor: { gt: 0 } } }); console.log('Valor:', c ? (c as any).valor : 'NULL'); } run();  

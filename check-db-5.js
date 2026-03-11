@@ -1,0 +1,1 @@
+import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient(); async function run() { const contratos = await prisma.contrato.findMany({ take: 5 }); console.log(contratos.map(c = c.nomePlano, st: c.dataInicio, end: c.dataFim}))); } run();  

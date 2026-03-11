@@ -1,0 +1,1 @@
+import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient(); async function run() { console.log('Finding...'); const contracts = await prisma.contrato.findMany(); console.log('Total Contracts in Local DB:', contracts.length); } run();  

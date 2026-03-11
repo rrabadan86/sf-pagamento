@@ -52,27 +52,28 @@ model AcademiaConfig {
 }
 
 model Aluno {
-  idEvo        String     @id
+  idEvo        String           @id
   nome         String
   email        String?
   celular      String?
-  contratos    Contrato[]
+  criadoEm     DateTime         @default(now())
+  atualizadoEm DateTime         @updatedAt
   checkins     Checkin[]
-  criadoEm     DateTime   @default(now())
-  atualizadoEm DateTime   @updatedAt
+  contratos    Contrato[]
+  gradesFixas  GradeFixaAluno[]
 }
 
 model Contrato {
   idEvo        String   @id
   idAluno      String
   nomePlano    String
-  status       String // Ativo, Cancelado, Trancado, etc.
+  status       String
+  valor        Float    @default(0)
   dataInicio   DateTime
   dataFim      DateTime
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
-
-  aluno Aluno @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
+  aluno        Aluno    @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
 
   @@index([idAluno])
 }
@@ -92,11 +93,27 @@ model Checkin {
   idAluno  String
   idAula   String?
   dataHora DateTime
-  status   String // Presente, Faltou, etc.
-
-  aluno Aluno @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
-  aula  Aula? @relation(fields: [idAula], references: [idEvo], onDelete: SetNull)
+  status   String
+  aluno    Aluno    @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
+  aula     Aula?    @relation(fields: [idAula], references: [idEvo])
 
   @@index([idAluno, dataHora])
   @@index([idAula])
+}
+
+model GradeFixaAluno {
+  id           Int       @id @default(autoincrement())
+  idAluno      String
+  idActivity   Int
+  activityName String
+  weekDay      Int
+  startTime    String
+  status       Int
+  startDate    DateTime
+  endDate      DateTime?
+  atualizadoEm DateTime  @updatedAt
+  aluno        Aluno     @relation(fields: [idAluno], references: [idEvo], onDelete: Cascade)
+
+  @@unique([idAluno, idActivity, weekDay, startTime])
+  @@index([idAluno])
 }

@@ -90,23 +90,47 @@ export async function GET(req: NextRequest) {
         }
 
         // Mega Cache das Grades Fixas dos alunos
-        // Precisamos consultar a API da EVO para saber os dias exatos de cada aluna fixa,
-        // caso contrário ela aparecerá como ausente em TODAS as aulas (bug das alunas duplicadas).
-        // Como o BD local aliviou 90% das queries da EVO (schedule detail e memberships), 
-        // consultar os fixed schedules de ~80 alunas ativas será muito rápido e não estourará sockets
-        // se fizermos em chunks paralelos limitados.
+        // Lemos do banco local (populado pelo cron de madrugada) para evitar ~80 chamadas à EVO API.
+        // Fallback: se o aluno não tiver grade no banco (ex: aluno novo antes do cron rodar), busca da EVO.
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
-        
-        const idsMatriculados = Array.from(todosIdMatriculadas);
-        const chunkedIds = chunkArray(idsMatriculados, 15); // Lotes de 15 chamadas por vez pra evitar timeouts
 
-        for (const chunk of chunkedIds) {
-            await Promise.all(
-                chunk.map(async (idMem) => {
+        const idsMatriculados = Array.from(todosIdMatriculadas);
+
+        // 1. Buscar do banco local (1 query para todos os alunos)
+        const gradesNoBanco = await prisma.gradeFixaAluno.findMany({
+            where: { idAluno: { in: idsMatriculados.map(String) } }
+        });
+
+        // Mapear por idAluno
+        const alunosComGradeNoBanco = new Set<number>();
+        for (const g of gradesNoBanco) {
+            const id = parseInt(g.idAluno);
+            if (!matriculasFixasGlobal.has(id)) matriculasFixasGlobal.set(id, []);
+            matriculasFixasGlobal.get(id)!.push({
+                idActivity: g.idActivity,
+                activityName: g.activityName,
+                weekDay: g.weekDay,
+                startTime: g.startTime,
+                status: g.status,
+                startDate: g.startDate.toISOString(),
+                endDate: g.endDate ? g.endDate.toISOString() : null,
+            });
+            alunosComGradeNoBanco.add(id);
+        }
+
+        // 2. Fallback: alunos sem grade no banco → buscar da EVO (ex: alunos novos)
+        const idsParaFallback = idsMatriculados.filter(id => !alunosComGradeNoBanco.has(id));
+        if (idsParaFallback.length > 0) {
+            console.log(`[Cálculo] Fallback EVO para ${idsParaFallback.length} aluno(s) sem grade no banco.`);
+            const chunkArray = <T>(arr: T[], size: number) =>
+                Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size));
+            const chunkedFallback = chunkArray(idsParaFallback, 15);
+            for (const chunk of chunkedFallback) {
+                await Promise.all(chunk.map(async (idMem) => {
                     const fixedScheduleArray = await getMemberFixedSchedules(idMem);
                     matriculasFixasGlobal.set(idMem, fixedScheduleArray);
-                })
-            );
+                }));
+            }
         }
 
         // 4. Sincronizar professores novos (percentual padrão 20%) + buscar percentual vigente
