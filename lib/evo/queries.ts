@@ -135,6 +135,7 @@ export async function getMemberMemberships(
  * Busca todos os contratos de uma aluna INDIVIDUALMENTE no BD.
  */
 export async function getMemberMembershipsById(idMember: number): Promise<EvoMemberMembership[]> {
+    if (!idMember) return [];
      const contratos = await prisma.contrato.findMany({
         where: {
             idAluno: idMember.toString()
@@ -160,7 +161,7 @@ function mapPrismaToEvoMembership(contrato: any): EvoMemberMembership {
         idBranch: 15, // Padrão
         numMembers: 1,
         idSale: parseInt(contrato.idEvo) || 0,
-        saleValue: 0, // A ser coberto pela lógica de "Plano Mensal" - A EVO não estava trazendo isso de forma fiel de qualquer modo
+        saleValue: contrato.valor || 0, // Puxa do Banco Local preenchido pela Seed V3
         nameMembership: contrato.nomePlano,
         membershipStart: contrato.dataInicio ? contrato.dataInicio.toISOString() : "2000-01-01T00:00:00Z",
         membershipEnd: contrato.dataFim ? contrato.dataFim.toISOString() : "2099-01-01T00:00:00Z",

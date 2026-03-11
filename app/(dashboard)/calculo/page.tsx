@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState, useCallback } from "react";
 
 interface AlunaCalculo {
@@ -61,8 +61,195 @@ function BadgeTipo({ tipo }: { tipo: "fixo" | "free" }) {
     return <span className={`badge ${tipo === "fixo" ? "badge-blue" : "badge-purple"}`}>{tipo === "fixo" ? "Fixo" : "Free"}</span>;
 }
 
+function SessaoCard({ dia, profId, turma, onExcluirAluna }: {
+    dia: ResultadoDiaDaSemana;
+    profId: string;
+    turma: ResultadoTurma;
+    onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const isSabado = dia.diaDaSemana.includes("Sábado");
+    // Extrair apenas a data da sessão (ex: "02/02 às 05:45")
+    const labelSessao = dia.diaDaSemana.replace(/^(Segunda|Terça|Quarta|Quinta|Sexta|Sábado)[^—]*—\s*/, "");
+
+    return (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+            <div
+                onClick={() => setOpen(!open)}
+                style={{ backgroundColor: "var(--bg-secondary)", padding: "8px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+            >
+                <div>
+                    <div style={{ fontWeight: 500, fontSize: 12 }}>{labelSessao}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        {dia.alunas.length} aluna{dia.alunas.length !== 1 ? "s" : ""}
+                    </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {dia.pisoAplicado && <span className="badge badge-yellow">Piso</span>}
+                    {dia.tetoAplicado && <span className="badge badge-red">Teto</span>}
+                    <div style={{ textAlign: "right" }}>
+                        <div style={{ fontWeight: 700, fontSize: 12, color: "var(--accent-hover)" }}>{fmt(dia.totalDiaNoMes)}</div>
+                        <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{fmt(dia.valorFinalPorAula)}/aula</div>
+                    </div>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                        style={{ color: "var(--text-faint)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s", flexShrink: 0 }}>
+                        <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                </div>
+            </div>
+
+            {open && (
+                <>
+                    {isSabado ? (
+                        <div style={{ padding: "12px", textAlign: "center", color: "var(--text-muted)", fontSize: 12 }}>
+                            Listagem de alunas oculta aos sábados (Diária Fixa).
+                        </div>
+                    ) : (
+                        <div className="table-wrap" style={{ margin: 0 }}>
+                            <table style={{ width: "100%" }}>
+                                <thead>
+                                    <tr>
+                                        <th>Aluna</th>
+                                        <th>Tipo</th>
+                                        <th>Contrato</th>
+                                        <th>Nome do Plano</th>
+                                        <th>Mês de Refer.</th>
+                                        <th>Pagou?</th>
+                                        <th style={{ textAlign: "right" }}>R$/Aula</th>
+                                        <th style={{ width: 40 }}></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {dia.alunas.map((a, i) => (
+                                        <tr key={`${a.idMember}-${i}`}>
+                                            <td style={{ fontWeight: 500 }}>{a.nome}</td>
+                                            <td><BadgeTipo tipo={a.tipo} /></td>
+                                            <td><BadgeStatus status={a.statusContrato} /></td>
+                                            <td style={{ color: "var(--text-muted)", fontSize: 13 }}>{a.nomeContrato}</td>
+                                            <td style={{ color: "var(--text-muted)" }}>{a.tipo === "fixo" ? fmt(a.mensalidade) : "—"}</td>
+                                            <td>
+                                                {a.tipo === "fixo"
+                                                    ? <span className={a.pagouNoMes ? "badge badge-green" : "badge badge-gray"}>
+                                                        {a.pagouNoMes ? "Sim" : "Não"}
+                                                    </span>
+                                                    : <span style={{ color: "var(--text-faint)" }}>—</span>
+                                                }
+                                            </td>
+                                            <td style={{ textAlign: "right", fontWeight: 600 }}>{fmt(a.contribuicaoPorAula)}</td>
+                                            <td style={{ textAlign: "center", width: 40 }}>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onExcluirAluna(profId, turma.nomeAtividade, dia.diaDaSemana, a.idMember, a.nome); }}
+                                                    title="Excluir aluna do cálculo desta sessão"
+                                                    style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", padding: 4 }}
+                                                >
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {dia.alunas.length === 0 && (
+                                        <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: "10px" }}>Nenhuma aluna nesta sessão — piso aplicado</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                    <div style={{ padding: "6px 14px", backgroundColor: "var(--bg-secondary)", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--text-muted)" }}>
+                        Bruto s/ trava: <strong style={{ color: "var(--text)" }}>{fmt(dia.totalBrutoPorAula)}</strong>
+                        {dia.pisoAplicado && <span style={{ marginLeft: 8, color: "var(--yellow)" }}>→ Ajustado (Piso {fmt(dia.pisoBase)})</span>}
+                        {dia.tetoAplicado && <span style={{ marginLeft: 8, color: "var(--red)" }}>→ Ajustado (Teto {fmt(dia.tetoBase)})</span>}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+function DiaSemanaGroup({ diaNome, sessoes, profId, turma, onExcluirAluna }: {
+    diaNome: string;
+    sessoes: ResultadoDiaDaSemana[];
+    profId: string;
+    turma: ResultadoTurma;
+    onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const totalGrupo = sessoes.reduce((s, d) => s + d.totalDiaNoMes, 0);
+    const mediaAula = sessoes.length > 0 ? sessoes.reduce((s, d) => s + d.valorFinalPorAula, 0) / sessoes.length : 0;
+    const algumPiso = sessoes.some(d => d.pisoAplicado);
+    const algumTeto = sessoes.some(d => d.tetoAplicado);
+
+    return (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+            {/* Header do Dia da Semana */}
+            <div
+                onClick={() => setOpen(!open)}
+                style={{
+                    backgroundColor: "var(--bg-card)",
+                    padding: "10px 16px",
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    cursor: "pointer",
+                    borderBottom: open ? "1px solid var(--border)" : "none"
+                }}
+            >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{
+                        width: 8, height: 8, borderRadius: "50%",
+                        backgroundColor: "var(--accent)", flexShrink: 0
+                    }} />
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{diaNome}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            {sessoes.length} sessão{sessoes.length !== 1 ? "ões" : ""} · {fmt(mediaAula)}/aula médio
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {algumPiso && <span className="badge badge-yellow">Piso</span>}
+                    {algumTeto && <span className="badge badge-red">Teto</span>}
+                    <div style={{ textAlign: "right" }}>
+                        <div style={{ fontWeight: 700, color: "var(--accent-hover)" }}>{fmt(totalGrupo)}</div>
+                        <div style={{ fontSize: 10, color: "var(--text-faint)" }}>total {diaNome.split("-")[0].trim()}</div>
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                        style={{ color: "var(--text-faint)", transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s", flexShrink: 0 }}>
+                        <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                </div>
+            </div>
+
+            {/* Sessões individuais do dia */}
+            {open && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", backgroundColor: "var(--bg)" }}>
+                    {sessoes.map((dia, idx) => (
+                        <SessaoCard key={idx} dia={dia} profId={profId} turma={turma} onExcluirAluna={onExcluirAluna} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function TurmaBlock({ turma, profId, onExcluirAluna }: { turma: ResultadoTurma, profId: string, onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void }) {
     const [open, setOpen] = useState(false);
+
+    // Agrupar sessões por dia da semana
+    const gruposDia = new Map<string, ResultadoDiaDaSemana[]>();
+    const ORDEM_DIAS = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
+    turma.dias.forEach(dia => {
+        const match = dia.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta|Sábado)-?feira?/);
+        const chave = match ? match[0].replace(/([a-z])([A-Z])/, "$1-$2") :
+            dia.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta|Sábado)/)?.[0] || dia.diaDaSemana.substring(0, 12);
+        const normalized = ORDEM_DIAS.find(d => chave.startsWith(d.split("-")[0])) || chave;
+        if (!gruposDia.has(normalized)) gruposDia.set(normalized, []);
+        gruposDia.get(normalized)!.push(dia);
+    });
+    // Ordenar grupos por dia da semana
+    const gruposOrdenados = Array.from(gruposDia.entries()).sort((a, b) => {
+        const ia = ORDEM_DIAS.indexOf(a[0]);
+        const ib = ORDEM_DIAS.indexOf(b[0]);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+
     return (
         <div className="turma-block">
             <div className="turma-header" onClick={() => setOpen(!open)} style={{ cursor: "pointer" }}>
@@ -85,84 +272,16 @@ function TurmaBlock({ turma, profId, onExcluirAluna }: { turma: ResultadoTurma, 
             </div>
 
             {open && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "12px 16px" }}>
-                    {turma.dias.map((dia, idx) => (
-                        <div key={idx} style={{ border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
-                            <div style={{ backgroundColor: "var(--bg-secondary)", padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                <div>
-                                    <div style={{ fontWeight: 600, fontSize: 13 }}>{dia.diaDaSemana}</div>
-                                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                                        {dia.totalAulasNoMes} aulas · {dia.alunas.length} alunas
-                                    </div>
-                                </div>
-                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                    {dia.pisoAplicado && <span className="badge badge-yellow">Piso R$55</span>}
-                                    {dia.tetoAplicado && <span className="badge badge-red">Teto R$90</span>}
-                                    <div style={{ textAlign: "right" }}>
-                                        <div style={{ fontWeight: 700, color: "var(--accent-hover)" }}>{fmt(dia.totalDiaNoMes)}</div>
-                                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{fmt(dia.valorFinalPorAula)}/aula</div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {dia.diaDaSemana.includes("Sábado") ? (
-                                <div style={{ padding: "16px", textAlign: "center", color: "var(--text-muted)", fontSize: 13, borderBottom: "1px solid var(--border)" }}>
-                                    Listagem de alunas oculta aos sábados (Diária Fixa).
-                                </div>
-                            ) : (
-                                <div className="table-wrap" style={{ margin: 0 }}>
-                                    <table style={{ width: "100%" }}>
-                                        <thead>
-                                            <tr>
-                                                <th>Aluna</th>
-                                                <th>Tipo</th>
-                                                <th>Contrato</th>
-                                                <th>Nome do Plano</th>
-                                                <th>Mês de Refer.</th>
-                                                <th>Pagou?</th>
-                                                <th style={{ textAlign: "right" }}>R$/Aula</th>
-                                                <th style={{ width: 40 }}></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {dia.alunas.map((a, i) => (
-                                                <tr key={`${a.idMember}-${i}`}>
-                                                    <td style={{ fontWeight: 500 }}>{a.nome}</td>
-                                                    <td><BadgeTipo tipo={a.tipo} /></td>
-                                                    <td><BadgeStatus status={a.statusContrato} /></td>
-                                                    <td style={{ color: "var(--text-muted)", fontSize: 13 }}>{a.nomeContrato}</td>
-                                                    <td style={{ color: "var(--text-muted)" }}>{a.tipo === "fixo" ? fmt(a.mensalidade) : "—"}</td>
-                                                    <td>
-                                                        {a.tipo === "fixo"
-                                                            ? <span className={a.pagouNoMes ? "badge badge-green" : "badge badge-gray"}>
-                                                                {a.pagouNoMes ? "Sim" : "Não"}
-                                                            </span>
-                                                            : <span style={{ color: "var(--text-faint)" }}>—</span>
-                                                        }
-                                                    </td>
-                                                    <td style={{ textAlign: "right", fontWeight: 600 }}>{fmt(a.contribuicaoPorAula)}</td>
-                                                    <td style={{ textAlign: "center", width: 40 }}>
-                                                        <button
-                                                            onClick={(e) => { e.stopPropagation(); onExcluirAluna(profId, turma.nomeAtividade, dia.diaDaSemana, a.idMember, a.nome); }}
-                                                            title="Excluir aluna do cálculo desta sessão"
-                                                            style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", padding: 4 }}
-                                                        >
-                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
-
-                            <div style={{ padding: "10px 14px", backgroundColor: "var(--bg-secondary)", borderTop: dia.diaDaSemana.includes("Sábado") ? "none" : "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)" }}>
-                                Bruto s/ trava: <strong style={{ color: "var(--text)" }}>{fmt(dia.totalBrutoPorAula)}</strong>
-                                {dia.pisoAplicado && <span style={{ marginLeft: 8, color: "var(--yellow)" }}>→ Ajustado (Piso R$55)</span>}
-                                {dia.tetoAplicado && <span style={{ marginLeft: 8, color: "var(--red)" }}>→ Ajustado (Teto R$90)</span>}
-                            </div>
-                        </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 16px" }}>
+                    {gruposOrdenados.map(([diaNome, sessoes]) => (
+                        <DiaSemanaGroup
+                            key={diaNome}
+                            diaNome={diaNome}
+                            sessoes={sessoes}
+                            profId={profId}
+                            turma={turma}
+                            onExcluirAluna={onExcluirAluna}
+                        />
                     ))}
 
                     <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 8 }}>
@@ -625,7 +744,9 @@ export default function CalculoPage() {
             if (!isSabado) {
                 const piso = diaInfo.pisoBase ?? 55;
                 const teto = diaInfo.tetoBase ?? 90;
-                if (totalBruto > 0 && totalBruto < piso) {
+                if (totalBruto < piso) {
+                    // Piso sempre aplicado quando bruto < piso, incluindo sessões sem alunas
+                    // (professor disponibilizou o horário independente de presença)
                     finalValor = piso;
                     diaInfo.pisoAplicado = true;
                 } else if (totalBruto > teto) {

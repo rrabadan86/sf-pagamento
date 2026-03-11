@@ -66,29 +66,47 @@ export async function GET(req: NextRequest) {
         const todosIdMatriculadas = new Set<number>();
         memberships.forEach(m => todosIdMatriculadas.add(m.idMember));
 
-        // Buscar Checkins locais (Prisma)
-        // Invés de bater na API de "Turma" e esgotar sockets, buscamos no Prisma
-        // Para alinhar o check-in com a aula, faremos um matching de tempo
-        const todosCheckinsDoMes = await prisma.checkin.findMany({
-            where: {
-                dataHora: {
-                    gte: new Date(ano, mes - 1, 1),
-                    lte: new Date(ano, mes, 0, 23, 59, 59)
-                }
-            },
-            include: { aluno: true }
-        });
+        // Helper para dividir array em lotes
+        const chunkArray = <T>(arr: T[], size: number) =>
+            Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
+                arr.slice(i * size, i * size + size)
+            );
 
-        // Mega Cache das Grades Fixas dos alunos - também local/Prisma 
-        // A EVO API esgotaria. Agora lemos a tabela Contrato local
+        // Buscar matrículas de presença por sessão da API EVO diretamente
+        // A API /api/v1/entries retorna array vazio para esta academia; a única fonte confiável
+        // é /api/v1/activities/schedule/detail com o idAtividadeSessao de cada aula.
+        // Fazemos isso em batches de 10 sessões para evitar esgotar sockets.
+        const sessionEnrollmentsCache = new Map<number, EvoEnrollment[]>();
+        const allSessionIds = schedule.map(a => a.idAtividadeSessao).filter((id): id is number => id != null);
+        
+        const sessionChunks = chunkArray(allSessionIds, 10);
+        for (const chunk of sessionChunks) {
+            await Promise.all(
+                chunk.map(async (sessId) => {
+                    const enrollments = await getTurmaEnrollments(sessId);
+                    sessionEnrollmentsCache.set(sessId, enrollments);
+                })
+            );
+        }
+
+        // Mega Cache das Grades Fixas dos alunos
+        // Precisamos consultar a API da EVO para saber os dias exatos de cada aluna fixa,
+        // caso contrário ela aparecerá como ausente em TODAS as aulas (bug das alunas duplicadas).
+        // Como o BD local aliviou 90% das queries da EVO (schedule detail e memberships), 
+        // consultar os fixed schedules de ~80 alunas ativas será muito rápido e não estourará sockets
+        // se fizermos em chunks paralelos limitados.
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
-        // Simulamos o formato legado partindo dos contratos locais (que agora chamam a atenção por datas Fim/Inicio e nome da turma)
-        for (const m of memberships) {
-             const agendamentosPorContrato = [];
-             // Como nosso bd simplificado novo não tem o relacionamento N:M de "Horários Fixos", 
-             // Faremos o matching pela string do Contrato ("3X Fixa Segunda") e "Duração Total".
-             // O código abaixo onde a matrícula fixa "injeta as alunas ausentes" no bloco de aula tratará
-             // os fallbacks.
+        
+        const idsMatriculados = Array.from(todosIdMatriculadas);
+        const chunkedIds = chunkArray(idsMatriculados, 15); // Lotes de 15 chamadas por vez pra evitar timeouts
+
+        for (const chunk of chunkedIds) {
+            await Promise.all(
+                chunk.map(async (idMem) => {
+                    const fixedScheduleArray = await getMemberFixedSchedules(idMem);
+                    matriculasFixasGlobal.set(idMem, fixedScheduleArray);
+                })
+            );
         }
 
         // 4. Sincronizar professores novos (percentual padrão 20%) + buscar percentual vigente
@@ -127,8 +145,9 @@ export async function GET(req: NextRequest) {
                 // Derivar dias da semana únicos para o cabeçalho descritivo "Segunda, Quarta..."
                 const diasSet = new Set<number>();
                 for (const a of aulas) {
-                    const d = new Date(a.activityDate).getDay();
-                    diasSet.add(d);
+                    const [y, mo, d] = a.activityDate.substring(0, 10).split('-').map(Number);
+                    const dObj = new Date(y, mo - 1, d); // local safe
+                    diasSet.add(dObj.getDay());
                 }
                 const diasArray = Array.from(diasSet).sort();
                 const nomesDias = diasArray.map((d) => DIAS_SEMANA[d]);
@@ -145,35 +164,25 @@ export async function GET(req: NextRequest) {
                 );
 
                 // Matching de Check-ins (Entries) do banco local para essa aula
+                // IMPORTANTE: usar parse seguro para evitar bug de timezone ("2026-02-04T00:00:00" pode
+                // ser interpretado como UTC e deslocar 1 dia p/ trás em BRT = Terça em vez de Quarta)
+                const parseLocalDate = (dateStr: string) => {
+                    const [y, mo, d] = dateStr.substring(0, 10).split('-').map(Number);
+                    return new Date(y, mo - 1, d); // local midnight, sem deslocamento de timezone
+                };
+
                 const aulasComMatriculas = aulasOrdenadas.map((aula) => {
-                    const dataAula = new Date(aula.activityDate);
-                    const [h, m] = aula.startTime.split(':').map(Number);
-                    
-                    // Definimos uma "Janela de Checkin": 45 minutos antes até 30 minutos depois do início da aula
-                    const tempoInicioAula = new Date(dataAula);
-                    tempoInicioAula.setHours(h, m, 0, 0);
-
-                    const limiteJanelaMin = new Date(tempoInicioAula.getTime() - 45 * 60000);
-                    const limiteJanelaMax = new Date(tempoInicioAula.getTime() + 30 * 60000);
-
-                    // Acha os check-ins que bateram nesse horário específico
-                    const checkinsDaJanela = todosCheckinsDoMes.filter((c: any) => {
-                        return c.dataHora >= limiteJanelaMin && c.dataHora <= limiteJanelaMax;
-                    });
-
-                    // Monta o "EvoEnrollment" simulado para manter compatibilidade total
-                    const enrollments: EvoEnrollment[] = checkinsDaJanela.map((c: any) => ({
-                        idMember: parseInt(c.idAluno),
-                        name: c.aluno.nome,
-                        replacement: false, // Default falso. A lógica compensará abaixo se o contrato diz reposição.
-                        status: 0 // 0 = Presente
-                    }));
+                    const dataAula = parseLocalDate(aula.activityDate);
+                    // Buscar enrollments da sessão diretamente do cache (pré-populado via API EVO)
+                    const enrollments: EvoEnrollment[] = sessionEnrollmentsCache.get(aula.idAtividadeSessao) || [];
 
                     return { aula, enrollments };
                 });
 
+
                 for (const { aula, enrollments } of aulasComMatriculas) {
-                    const dataAula = new Date(aula.activityDate);
+                    // TIMEZONE FIX: usar parse local para evitar shift de 1 dia com strings sem timezone
+                    const dataAula = parseLocalDate(aula.activityDate);
                     const nomeDiaStr = DIAS_SEMANA[dataAula.getDay()];
 
                     const pDia = dataAula.getDate().toString().padStart(2, "0");
@@ -181,7 +190,11 @@ export async function GET(req: NextRequest) {
                     const diaDesc = `${nomeDiaStr} — ${pDia}/${pMes} às ${aula.startTime}`;
 
                     const statusMatriculadas = new Map<number, { name: string, replacement: boolean; status: number }>();
-                    enrollments.forEach(e => statusMatriculadas.set(e.idMember, { name: e.name, replacement: e.replacement, status: e.status }));
+                    // Pular enrollments sem idMember válido (ex: aulas experimentais de visitantes)
+                    enrollments.forEach(e => {
+                        if (!e.idMember) return;
+                        statusMatriculadas.set(e.idMember, { name: e.name, replacement: e.replacement, status: e.status });
+                    });
 
                     const diaAulaNum = dataAula.getDay();
                     const startTimeMask = aula.startTime.substring(0, 5); // ex: "08:30"
@@ -194,16 +207,25 @@ export async function GET(req: NextRequest) {
                     const classDay = new Date(dataAula.getFullYear(), dataAula.getMonth(), dataAula.getDate()).getTime();
 
                     // INJETAR ALUNAS FIXAS QUE ESTÃO AUSENTES/NENHUMA ENROLLMENT (ex: Feriado / Zero ocupação)
-                    // Como não trazemos mais a "Fixed Schedulle" granular da EVO, nós assumimos presença/falta
-                    // baseados APENAS no Checkin (Presentes). Para alunas fixas "ausentes", nós validamos
-                    // as regras no momento de dividir o rateio de Mensalidades.
-                    // Nós adicionaremos ficticiamente todas as Alunas que tem Contrato Fixo VIGENTE para serem listadas
-                    for (const mbr of memberships.filter(m => tipoDePlano(m.nameMembership) === "fixo")) {
-                        if (statusMatriculadas.has(mbr.idMember)) continue; // Já está listada ali em cima pq passou no catraca
+                    // Agora usamos a `matriculasFixasGlobal` resgatada da EVO api corretamente 
+                    for (const [idMember, grades] of Array.from(matriculasFixasGlobal.entries())) {
+                        if (statusMatriculadas.has(idMember)) continue; // Já está listada (presente/ausente/reposição)
 
-                        // Se a aluna fixa não passou na catraca, injetamos ela como AUSENTE para calcular o Rateio da Mensalidade
-                        // Se for reposição, a lógica inferior tratará corretamente
-                        statusMatriculadas.set(mbr.idMember, { name: mbr.name, replacement: false, status: 1 });
+                        // Verifica se este idMember tem grade fixa para a data/hora e que estivesse VIGENTE no dia classDay
+                        const ehOficialmenteDela = grades.some(ag => {
+                            if (ag.weekDay !== diaAulaNum) return false;
+                            if (!ag.startTime.startsWith(startTimeMask)) return false;
+                            const inicio = dayOnly(ag.startDate);
+                            const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                            return classDay >= inicio && classDay <= fim;
+                        });
+
+                        if (ehOficialmenteDela) {
+                            const m = memberships.find(m => m.idMember === idMember);
+                            const name = m ? m.name : "Desconhecida";
+                            // Adiciona como ausente (status=1) e garante que seja processada pro cálculo da turma 
+                            statusMatriculadas.set(idMember, { name, replacement: false, status: 1 });
+                        }
                     }
 
                     const alunasDoMes: AlunaCalculo[] = [];
@@ -211,6 +233,7 @@ export async function GET(req: NextRequest) {
                     const calcDate = new Date(ano, mes - 1, dataAula.getDate());
 
                     for (const [idMember, evoData] of Array.from(statusMatriculadas.entries())) {
+                        if (!idMember) continue; // Pular visitantes/experimentais sem ID de membro
                         const isEvoReplacement = evoData.replacement;
                         const isPresent = evoData.status === 0;
                         let memberContracts = memberships.filter((m) => m.idMember === idMember);
@@ -232,6 +255,18 @@ export async function GET(req: NextRequest) {
 
                         if (memberContracts.length === 0) {
                             if (isPresent) {
+                                // Verificar se a aluna tem contrato em algum outro mês (ex: aluna experimental)
+                                // Se tiver contrato FUTURO (início após o mês calculado), é aula experimental → pular
+                                const todosContratos = await getMemberMembershipsById(idMember);
+                                const fimDoMes = new Date(ano, mes, 0, 23, 59, 59); // último segundo do mês
+                                const temContratoFuturo = todosContratos.some(c => {
+                                    const inicio = c.membershipStart ? new Date(c.membershipStart) : null;
+                                    return inicio && inicio > fimDoMes;
+                                });
+                                if (temContratoFuturo) {
+                                    // Aluna experimental — contrato apenas em mês futuro → não contabilizar
+                                    continue;
+                                }
                                 // Fallback VIP/Avulsa Virtual - Aluna assistiu à aula, garantimos R$ 11
                                 memberContracts = [{
                                     idMember: idMember,
@@ -351,11 +386,27 @@ export async function GET(req: NextRequest) {
                             valorMes = round2(valorMes * 0.97);
                         }
 
-                        // Em repensamento, 'reposição' será assumida sempre como Falso porque o pagamento da aula é fracionado no total do mes, 
-                        // O que dilui a aula independentemente se foi reposicão ou presenca oficial, não importando para a divisão de salário.
+                        // Reposição e Avaliação de Pertencimento:
+                        const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
                         let isFixoEmReposicao = false;
+                        
+                        if (tipo === "fixo") {
+                            const ehOficialmenteDela = agendaAluna.some(ag => {
+                                if (ag.weekDay !== diaAulaNum) return false;
+                                if (!ag.startTime.startsWith(startTimeMask)) return false;
+                                const inicio = dayOnly(ag.startDate);
+                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                                return classDay >= inicio && classDay <= fim;
+                            });
 
-                        // Alunas Free rendem R$ 11. Fixas em Reposição não rendemos R$ 0, entram no fracionamento natural do contrato.
+                            if (!ehOficialmenteDela) {
+                                isFixoEmReposicao = true;
+                            } else if (isEvoReplacement === true) {
+                                isFixoEmReposicao = true;
+                            }
+                        }
+
+                        // Alunas Free rendem R$ 11. Fixas em Reposição rendem R$ 0.
                         let contrib = 0;
                         if (tipo === "fixo") {
                             // Encontrar 'dias de treino no mês' (divisor da mensalidade).
@@ -401,8 +452,35 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                        // Ocultar alunas de reposição da lista final conforme regra de negócio
-                        if (isFixoEmReposicao) continue;
+                        // CORREÇÃO: Aluna FIXO em reposição pode ter plano FREE vigente
+                        // Se sim, usar o FREE em vez de ocultar (ex: Bruna com SlimFit Anual + FREE 3X)
+                        if (isFixoEmReposicao) {
+                            if (isPresent) {
+                                const freeContracts = memberContracts.filter(mc => {
+                                    if (tipoDePlano(mc.nameMembership) !== 'free') return false;
+                                    const fStart = mc.membershipStart ? new Date(mc.membershipStart) : new Date(0);
+                                    const fEnd = mc.membershipEnd ? new Date(mc.membershipEnd) : new Date('2099-01-01');
+                                    return fStart <= calcDate && fEnd >= calcDate;
+                                });
+                                if (freeContracts.length > 0) {
+                                    const freeM = freeContracts[0];
+                                    const freeNomeLower = (freeM.name || evoData.name || '').toLowerCase();
+                                    const isFreeVip = ALUNAS_VIP_ZERO.some(exc => freeNomeLower.includes(exc));
+                                       alunasDoMes.push({
+                                        idMember,
+                                        nome: freeM.name || evoData.name || 'Aluna',
+                                        tipo: 'free' as const,
+                                        contribuicaoPorAula: isFreeVip ? 0 : CONTRIBUICAO_FREE,
+                                        mensalidade: 0,
+                                        nomeContrato: freeM.nameMembership || 'Free',
+                                        statusContrato: statusContrato(freeM) as any,
+                                        pagouNoMes: false,
+                                        dataFimContrato: freeM.membershipEnd ?? null
+                                    });
+                                }
+                            }
+                            continue; // Sem contrato FREE ou ausente → ocultar reposição
+                        }
 
                         const finalStatus = statusContrato(m);
 
@@ -426,23 +504,18 @@ export async function GET(req: NextRequest) {
                     const alunasDiaList = alunasDoMes.slice(0, 9);
                     const isSabado = dataAula.getDay() === 6;
 
-                    // Se a alunasDiaList for VAZIA (nenhuma aluna, ou todas faltaram), nós ainda precisamos calcular o Piso! 
-                    // O calcularDiaDaSemana zera quando o array é vazio (pois não tem 'contribuicao'), mas deve garantir o piso mínimo.
+                    // Usar || 55 em vez de ?? 55 para cobrir caso edge de piso=0 armazenado no banco
+                    const pisoAtivo: number = ((percRecord as any)?.piso) || 55;
+                    const tetoAtivo: number = ((percRecord as any)?.teto) || 90;
+
+                    // Calcular o dia — piso/teto passados aqui, mas também reaplicados abaixo para garantia
                     const diaCalc = calcularDiaDaSemana({
                         diaDaSemana: diaDesc,
                         totalAulasNoDia: 1, // Exatamente 1 aula nesta sessão
                         alunasCalculadas: alunasDiaList,
-                        piso: (percRecord as any)?.piso ?? 55,
-                        teto: (percRecord as any)?.teto ?? 90,
+                        piso: pisoAtivo,
+                        teto: tetoAtivo,
                     });
-
-                    // Correção: Se a aula tem ocupação 0, a professora estava lá e o piso TEM que ser aplicado.
-                    if (alunasDiaList.length === 0) {
-                        const pisoAtivo = (percRecord as any)?.piso ?? 55;
-                        diaCalc.valorFinalPorAula = pisoAtivo;
-                        diaCalc.totalDiaNoMes = pisoAtivo;
-                        diaCalc.pisoAplicado = true;
-                    }
 
                     // REGRA DO SÁBADO (DIÁRIA GLOBAL)
                     // Se for Sábado, a professora tem garantidos R$ 70,00 naquele dia.
@@ -456,8 +529,17 @@ export async function GET(req: NextRequest) {
                         diaCalc.diaDaSemana += " (Diária Fixa Sábado)";
                     } else {
                         diaCalc.totalBrutoPorAula = round2(diaCalc.totalBrutoPorAula);
-                        diaCalc.valorFinalPorAula = round2(diaCalc.valorFinalPorAula);
-                        diaCalc.totalDiaNoMes = round2(diaCalc.totalDiaNoMes);
+                        // Aplicar piso/teto APÓS round2 para garantir que seja a última palavra
+                        if (diaCalc.valorFinalPorAula < pisoAtivo) {
+                            diaCalc.valorFinalPorAula = pisoAtivo;
+                            diaCalc.pisoAplicado = true;
+                        } else if (diaCalc.valorFinalPorAula > tetoAtivo) {
+                            diaCalc.valorFinalPorAula = tetoAtivo;
+                            diaCalc.tetoAplicado = true;
+                        } else {
+                            diaCalc.valorFinalPorAula = round2(diaCalc.valorFinalPorAula);
+                        }
+                        diaCalc.totalDiaNoMes = round2(diaCalc.valorFinalPorAula * diaCalc.totalAulasNoMes);
                     }
 
                     diaCalc.alunas = diaCalc.alunas.map((a) => ({
