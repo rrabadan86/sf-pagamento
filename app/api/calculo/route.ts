@@ -334,28 +334,12 @@ export async function GET(req: NextRequest) {
                             if (className.includes("slimfit") && bName.includes("slimfit")) bScore += 10;
                             if (className.includes("circuito") && aName.includes("circuito")) aScore += 10;
                             if (className.includes("circuito") && bName.includes("circuito")) bScore += 10;
-                            // Contratos FREE que citam o tipo da turma explicitamente
-                            // (ex: "FREE 3X SLIMFIT" em aula de SLIMFIT) têm prioridade máxima.
-                            // Contratos fixo genéricos recebem +5 como fallback.
-                            const aIsFree = tipoDePlano(a.nameMembership) === "free";
-                            const bIsFree = tipoDePlano(b.nameMembership) === "free";
-                            const aMatchesFreeClass = aIsFree && (
-                                (className.includes("slimfit") && aName.includes("slimfit")) ||
-                                (className.includes("circuito") && (aName.includes("circuito") || aName.includes("circ")))
-                            );
-                            const bMatchesFreeClass = bIsFree && (
-                                (className.includes("slimfit") && bName.includes("slimfit")) ||
-                                (className.includes("circuito") && (bName.includes("circuito") || bName.includes("circ")))
-                            );
-                            if (aMatchesFreeClass) aScore += 7;
-                            else if (!aIsFree) aScore += 5; // fixo genérico
-                            if (bMatchesFreeClass) bScore += 7;
-                            else if (!bIsFree) bScore += 5; // fixo genérico
 
-                            // Contrato Ativo deve ter prioridade alta sobre Cancelado/Suspenso
-                            // (+8 garante que Ativo sempre vença Cancelado mesmo com +5 de fixo)
-                            if (statusContrato(a) === "Ativo") aScore += 8;
-                            if (statusContrato(b) === "Ativo") bScore += 8;
+                            if (tipoDePlano(a.nameMembership) === "fixo") aScore += 5;
+                            if (tipoDePlano(b.nameMembership) === "fixo") bScore += 5;
+
+                            if (statusContrato(a) === "Ativo") aScore += 2;
+                            if (statusContrato(b) === "Ativo") bScore += 2;
 
                             // Vigência no mês de cálculo
                             const aStart = a.membershipStart ? new Date(a.membershipStart) : new Date(0);
@@ -385,7 +369,7 @@ export async function GET(req: NextRequest) {
                         let explicitMonths = 0;
                         if (nameLower.includes("anual")) explicitMonths = 12;
                         else if (nameLower.includes("semestral")) explicitMonths = 6;
-                        else if (nameLower.includes("trimestral") || nameLower.includes("trim.")) explicitMonths = 3;
+                        else if (nameLower.includes("trimestral")) explicitMonths = 3;
                         else if (nameLower.includes("bimestral")) explicitMonths = 2;
                         else if (nameLower.includes("mensal")) explicitMonths = 1;
 
@@ -427,48 +411,22 @@ export async function GET(req: NextRequest) {
                         }
 
                         // Reposição e Avaliação de Pertencimento:
-                        // Combina três fontes para máxima precisão:
-                        // 1) Flag `replacement` da EVO (quando marcado, é definitivo)
-                        // 2) Grade fixa local — verifica se a aluna pertence a este dia/horário
-                        // 3) Se a aluna tem grades ativas em OUTROS dias → está fazendo reposição
-                        //    Se não tem NENHUMA grade ativa → dados locais estão desatualizados, confia na EVO
                         const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
                         let isFixoEmReposicao = false;
                         
                         if (tipo === "fixo") {
-                            if (isEvoReplacement === true) {
-                                // EVO marca explicitamente como reposição
-                                isFixoEmReposicao = true;
-                            } else {
-                                const ehOficialmenteDela = agendaAluna.some(ag => {
-                                    if (ag.weekDay !== diaAulaNum) return false;
-                                    if (!ag.startTime.startsWith(startTimeMask)) return false;
-                                    const inicio = dayOnly(ag.startDate);
-                                    const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
-                                    return classDay >= inicio && classDay <= fim;
-                                });
+                            const ehOficialmenteDela = agendaAluna.some(ag => {
+                                if (ag.weekDay !== diaAulaNum) return false;
+                                if (!ag.startTime.startsWith(startTimeMask)) return false;
+                                const inicio = dayOnly(ag.startDate);
+                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                                return classDay >= inicio && classDay <= fim;
+                            });
 
-                                if (ehOficialmenteDela) {
-                                    // Grade fixa confirma: esta é a aula oficial dela
-                                    isFixoEmReposicao = false;
-                                } else if (isPresent) {
-                                    // Presente mas grade fixa não confirma este dia/horário.
-                                    // Verificar se ela tem ALGUMA grade ativa (em qualquer dia) —
-                                    // se sim, os dados locais são confiáveis e ela está fazendo reposição.
-                                    // Se não tem nenhuma grade ativa, os dados locais estão desatualizados
-                                    // (ex: cron ainda não sincronizou) → confia na presença.
-                                    const temAlgumaGradeAtiva = agendaAluna.some(ag => {
-                                        if (ag.endDate) {
-                                            const fim = dayOnly(ag.endDate);
-                                            return classDay <= fim;
-                                        }
-                                        return true; // sem endDate = ativa
-                                    });
-                                    isFixoEmReposicao = temAlgumaGradeAtiva;
-                                } else {
-                                    // Ausente sem grade fixa para este dia → reposição injetada indevidamente
-                                    isFixoEmReposicao = true;
-                                }
+                            if (!ehOficialmenteDela) {
+                                isFixoEmReposicao = true;
+                            } else if (isEvoReplacement === true) {
+                                isFixoEmReposicao = true;
                             }
                         }
 
@@ -504,12 +462,7 @@ export async function GET(req: NextRequest) {
 
                             if (freq > 0) diasDeTreinoNoMes = Math.round(freq * (diasNoMes / 7));
 
-                            // Aluna FIXO com mensalidade R$ 0,00 = VIP/cortesia → R$ 11 (ou R$ 0 se na lista de exceção)
-                            if (valorMes === 0 && isPresent) {
-                                contrib = isVipZero ? 0 : CONTRIBUICAO_FREE;
-                            } else {
-                                contrib = isFixoEmReposicao ? 0 : contribuicaoFixa(valorMes, percentual, diasDeTreinoNoMes);
-                            }
+                            contrib = isFixoEmReposicao ? 0 : contribuicaoFixa(valorMes, percentual, diasDeTreinoNoMes);
                         } else {
                             // Alunas com plano Free só geram a remuneração de R$ 11,00 se estiverem PRESENTES (status === 0 na EVO)
                             if (isVipZero) {
