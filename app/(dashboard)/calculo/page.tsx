@@ -812,12 +812,8 @@ export default function CalculoPage() {
         const dia = turma.dias.find(d => d.diaDaSemana === diaString);
         if (!dia) return;
 
-        // Adicionar a aluna com contribuição R$ 11 (VIP/inserção manual)
-        dia.alunas.push({
-            ...aluna,
-            contribuicaoPorAula: 11,
-            tipo: "free" as const,
-        });
+        // Adicionar a aluna com seu valor original do plano
+        dia.alunas.push({ ...aluna });
 
         // Recalcular totais da sessão
         const isSabado = dia.diaDaSemana.includes("Sábado");
