@@ -10,9 +10,10 @@ export const dynamic = 'force-dynamic'; // Evita cache agressivo do Next.js na r
 export async function GET(request: NextRequest) {
     // 1. Validar a Secret do CRON para evitar execuções maliciosas públicas
     const authHeader = request.headers.get("authorization");
+    const secretParam = request.nextUrl.searchParams.get("secret");
     const cronSecret = process.env.CRON_SECRET;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && secretParam !== cronSecret) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -162,7 +163,14 @@ export async function GET(request: NextRequest) {
                 await Promise.all(chunk.map(async (idMember) => {
                     try {
                         const grades = await getMemberFixedSchedules(idMember);
-                        for (const g of grades) {
+                        // Ordenar para que registros ativos (status=1) sejam processados POR ÚLTIMO,
+                        // garantindo que sobrescrevam os removidos (status=2) no upsert
+                        // quando compartilham a mesma chave (idAluno, idActivity, weekDay, startTime)
+                        const gradesSorted = [...grades].sort((a, b) => {
+                            // status=2 primeiro, status=1 por último (vence no upsert)
+                            return (b.status ?? 1) - (a.status ?? 1);
+                        });
+                        for (const g of gradesSorted) {
                             if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
                             await prisma.gradeFixaAluno.upsert({
                                 where: {
