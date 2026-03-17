@@ -444,19 +444,17 @@ export async function GET(req: NextRequest) {
                             // Exemplo 1: "2X SLIMFIT" / "3X CIRC"
                             // Exemplo 2: "SLIMFIT 3X" / "CIRC 2X"
                             // Se não achar nada perto do nome da aula, pegar o genérico (se hover só 1 no texto)
+                            // Extrair frequência semanal do nome do plano.
+                            // Para planos combo como "3X fixa + 2X SLIMFIT" somamos TODAS as frequências.
+                            // Exemplos:
+                            //   "SLIMFIT 3X FIXA" → 3
+                            //   "FLEX 3X fixa + 2X SLIMFIT/CIRC SLIM" → 3+2 = 5
+                            //   "BF Trim. - FLEX 2X fixa + 2X SLIMFIT/CIRC SLIM" → 2+2 = 4
                             let freq = 0;
-                            const matchAulaPre = nameStr.match(/(\d+)\s*X\s*(?:SLIM|CIRC|AULA)/);
-                            const matchAulaPos = nameStr.match(/(?:SLIM|CIRC|AULA)\s*(\d+)\s*X/);
-
-                            if (matchAulaPre) {
-                                freq = parseInt(matchAulaPre[1]);
-                            } else if (matchAulaPos) {
-                                freq = parseInt(matchAulaPos[1]);
-                            } else {
-                                // Fallback cego caso seja tipo "PLANO 3X RECORRENTE" (Não cita o nome explicitamente perto do X)
-                                const stringXMatches = nameStr.match(/(\d+)\s*X/g);
-                                if (stringXMatches && stringXMatches.length > 0) {
-                                    for (const x of stringXMatches) freq += parseInt(x.replace(/\D/g, ""));
+                            const allFreqMatches = nameStr.match(/(\d+)\s*X/g);
+                            if (allFreqMatches && allFreqMatches.length > 0) {
+                                for (const x of allFreqMatches) {
+                                    freq += parseInt(x.replace(/\D/g, ""));
                                 }
                             }
 
