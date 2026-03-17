@@ -61,13 +61,17 @@ function BadgeTipo({ tipo }: { tipo: "fixo" | "free" }) {
     return <span className={`badge ${tipo === "fixo" ? "badge-blue" : "badge-purple"}`}>{tipo === "fixo" ? "Fixo" : "Free"}</span>;
 }
 
-function SessaoCard({ dia, profId, turma, onExcluirAluna }: {
+function SessaoCard({ dia, profId, turma, onExcluirAluna, onInserirAluna, allAlunas }: {
     dia: ResultadoDiaDaSemana;
     profId: string;
     turma: ResultadoTurma;
     onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void;
+    onInserirAluna: (profId: string, nomeTurma: string, dia: string, aluna: AlunaCalculo) => void;
+    allAlunas: AlunaCalculo[];
 }) {
     const [open, setOpen] = useState(false);
+    const [showInsert, setShowInsert] = useState(false);
+    const [searchTerm, setSearchTerm] = useState("");
     const isSabado = dia.diaDaSemana.includes("Sábado");
     // Extrair apenas a data da sessão (ex: "02/02 às 05:45")
     const labelSessao = dia.diaDaSemana.replace(/^(Segunda|Terça|Quarta|Quinta|Sexta|Sábado)[^—]*—\s*/, "");
@@ -152,6 +156,66 @@ function SessaoCard({ dia, profId, turma, onExcluirAluna }: {
                                     )}
                                 </tbody>
                             </table>
+                            {/* Botão + para inserir aluna */}
+                            <div style={{ padding: "6px 14px", borderTop: "1px solid var(--border)" }}>
+                                {!showInsert ? (
+                                    <button
+                                        onClick={() => { setShowInsert(true); setSearchTerm(""); }}
+                                        style={{ background: "none", border: "1px dashed var(--border)", borderRadius: 4, color: "var(--accent)", cursor: "pointer", padding: "4px 10px", fontSize: 12, display: "flex", alignItems: "center", gap: 4, width: "100%", justifyContent: "center" }}
+                                    >
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                                        Inserir aluna
+                                    </button>
+                                ) : (
+                                    <div>
+                                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                            <input
+                                                type="text"
+                                                className="input"
+                                                placeholder="Buscar aluna pelo nome..."
+                                                value={searchTerm}
+                                                onChange={e => setSearchTerm(e.target.value)}
+                                                autoFocus
+                                                style={{ flex: 1, fontSize: 12, padding: "6px 10px" }}
+                                            />
+                                            <button
+                                                onClick={() => { setShowInsert(false); setSearchTerm(""); }}
+                                                style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", padding: 4 }}
+                                            >
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                                            </button>
+                                        </div>
+                                        {searchTerm.length >= 2 && (() => {
+                                            const idsNaSessao = new Set(dia.alunas.map(a => a.idMember));
+                                            const filtered = allAlunas
+                                                .filter(a => !idsNaSessao.has(a.idMember) && a.nome.toLowerCase().includes(searchTerm.toLowerCase()))
+                                                .slice(0, 8);
+                                            return filtered.length > 0 ? (
+                                                <div style={{ marginTop: 4, border: "1px solid var(--border)", borderRadius: 4, maxHeight: 200, overflowY: "auto", backgroundColor: "var(--bg)" }}>
+                                                    {filtered.map(a => (
+                                                        <div
+                                                            key={a.idMember}
+                                                            onClick={() => {
+                                                                onInserirAluna(profId, turma.nomeAtividade, dia.diaDaSemana, a);
+                                                                setShowInsert(false);
+                                                                setSearchTerm("");
+                                                            }}
+                                                            style={{ padding: "6px 10px", cursor: "pointer", fontSize: 12, borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                                                            onMouseEnter={e => (e.currentTarget.style.backgroundColor = "var(--bg-secondary)")}
+                                                            onMouseLeave={e => (e.currentTarget.style.backgroundColor = "transparent")}
+                                                        >
+                                                            <span style={{ fontWeight: 500 }}>{a.nome}</span>
+                                                            <span style={{ color: "var(--text-faint)", fontSize: 11 }}>{a.tipo === "free" ? "Free" : "Fixo"} · {a.nomeContrato.substring(0, 30)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div style={{ marginTop: 4, padding: "8px", textAlign: "center", color: "var(--text-faint)", fontSize: 12 }}>Nenhuma aluna encontrada</div>
+                                            );
+                                        })()}
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                     <div style={{ padding: "6px 14px", backgroundColor: "var(--bg-secondary)", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--text-muted)" }}>
@@ -165,12 +229,14 @@ function SessaoCard({ dia, profId, turma, onExcluirAluna }: {
     );
 }
 
-function DiaSemanaGroup({ diaNome, sessoes, profId, turma, onExcluirAluna }: {
+function DiaSemanaGroup({ diaNome, sessoes, profId, turma, onExcluirAluna, onInserirAluna, allAlunas }: {
     diaNome: string;
     sessoes: ResultadoDiaDaSemana[];
     profId: string;
     turma: ResultadoTurma;
     onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void;
+    onInserirAluna: (profId: string, nomeTurma: string, dia: string, aluna: AlunaCalculo) => void;
+    allAlunas: AlunaCalculo[];
 }) {
     const [open, setOpen] = useState(false);
     const totalGrupo = sessoes.reduce((s, d) => s + d.totalDiaNoMes, 0);
@@ -221,7 +287,7 @@ function DiaSemanaGroup({ diaNome, sessoes, profId, turma, onExcluirAluna }: {
             {open && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", backgroundColor: "var(--bg)" }}>
                     {sessoes.map((dia, idx) => (
-                        <SessaoCard key={idx} dia={dia} profId={profId} turma={turma} onExcluirAluna={onExcluirAluna} />
+                        <SessaoCard key={idx} dia={dia} profId={profId} turma={turma} onExcluirAluna={onExcluirAluna} onInserirAluna={onInserirAluna} allAlunas={allAlunas} />
                     ))}
                 </div>
             )}
@@ -229,7 +295,7 @@ function DiaSemanaGroup({ diaNome, sessoes, profId, turma, onExcluirAluna }: {
     );
 }
 
-function TurmaBlock({ turma, profId, onExcluirAluna }: { turma: ResultadoTurma, profId: string, onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void }) {
+function TurmaBlock({ turma, profId, onExcluirAluna, onInserirAluna, allAlunas }: { turma: ResultadoTurma, profId: string, onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void, onInserirAluna: (profId: string, nomeTurma: string, dia: string, aluna: AlunaCalculo) => void, allAlunas: AlunaCalculo[] }) {
     const [open, setOpen] = useState(false);
 
     // Agrupar sessões por dia da semana
@@ -281,6 +347,8 @@ function TurmaBlock({ turma, profId, onExcluirAluna }: { turma: ResultadoTurma, 
                             profId={profId}
                             turma={turma}
                             onExcluirAluna={onExcluirAluna}
+                            onInserirAluna={onInserirAluna}
+                            allAlunas={allAlunas}
                         />
                     ))}
 
@@ -365,12 +433,16 @@ function ProfessorCard({
     ano,
     onGerarPDF,
     onExcluirAluna,
+    onInserirAluna,
+    allAlunas,
 }: {
     prof: ResultadoProfessor;
     mes: number;
     ano: number;
     onGerarPDF: (prof: ResultadoProfessor) => Promise<void>;
     onExcluirAluna: (profId: string, nomeTurma: string, dia: string, idMember: number, nomeAluna: string) => void;
+    onInserirAluna: (profId: string, nomeTurma: string, dia: string, aluna: AlunaCalculo) => void;
+    allAlunas: AlunaCalculo[];
 }) {
     const [open, setOpen] = useState(false);
     const [gerando, setGerando] = useState(false);
@@ -437,7 +509,7 @@ function ProfessorCard({
                     <MatrizProfessor prof={prof} />
 
                     {prof.turmas.map((turma, i) => (
-                        <TurmaBlock key={i} turma={turma} profId={prof.idProfessorEvo} onExcluirAluna={onExcluirAluna} />
+                        <TurmaBlock key={i} turma={turma} profId={prof.idProfessorEvo} onExcluirAluna={onExcluirAluna} onInserirAluna={onInserirAluna} allAlunas={allAlunas} />
                     ))}
                     <div style={{
                         display: "flex", justifyContent: "flex-end", padding: "12px 0 0",
@@ -720,6 +792,57 @@ export default function CalculoPage() {
     const handleExcluirAlunaGlobal = useCallback((idMember: number, nomeAluna: string) => {
         setModalExclusao({ open: true, profId: "", nomeTurma: "", diaString: "", idMember, nomeAluna, motivo: "", escopo: "global" });
     }, []);
+
+    // Lista global de todas as alunas únicas (para busca na inserção)
+    const todasAlunas: AlunaCalculo[] = resultado ? (() => {
+        const map = new Map<number, AlunaCalculo>();
+        resultado.professores.forEach(p => p.turmas.forEach(t => t.dias.forEach(d => d.alunas.forEach(a => {
+            if (!map.has(a.idMember)) map.set(a.idMember, a);
+        }))));
+        return Array.from(map.values()).sort((a, b) => a.nome.localeCompare(b.nome));
+    })() : [];
+
+    const handleInserirAluna = useCallback((profId: string, nomeTurma: string, diaString: string, aluna: AlunaCalculo) => {
+        if (!resultado) return;
+        const newRes = JSON.parse(JSON.stringify(resultado)) as typeof resultado;
+        const prof = newRes.professores.find(p => p.idProfessorEvo === profId);
+        if (!prof) return;
+        const turma = prof.turmas.find(t => t.nomeAtividade === nomeTurma);
+        if (!turma) return;
+        const dia = turma.dias.find(d => d.diaDaSemana === diaString);
+        if (!dia) return;
+
+        // Adicionar a aluna com contribuição R$ 11 (VIP/inserção manual)
+        dia.alunas.push({
+            ...aluna,
+            contribuicaoPorAula: 11,
+            tipo: "free" as const,
+        });
+
+        // Recalcular totais da sessão
+        const isSabado = dia.diaDaSemana.includes("Sábado");
+        const totalBruto = dia.alunas.reduce((sum, a) => sum + a.contribuicaoPorAula, 0);
+        dia.totalBrutoPorAula = Number(totalBruto.toFixed(2));
+        let finalValor = totalBruto;
+        dia.pisoAplicado = false;
+        dia.tetoAplicado = false;
+        if (!isSabado) {
+            const piso = dia.pisoBase ?? 55;
+            const teto = dia.tetoBase ?? 90;
+            if (totalBruto < piso) { finalValor = piso; dia.pisoAplicado = true; }
+            else if (totalBruto > teto) { finalValor = teto; dia.tetoAplicado = true; }
+        } else {
+            finalValor = 70.0;
+        }
+        dia.valorFinalPorAula = Number(finalValor.toFixed(2));
+        dia.totalDiaNoMes = Number((finalValor * dia.totalAulasNoMes).toFixed(2));
+
+        turma.totalTurmaNoMes = Number(turma.dias.reduce((s, d) => s + d.totalDiaNoMes, 0).toFixed(2));
+        prof.totalGeralNoMes = Number(prof.turmas.reduce((s, t) => s + t.totalTurmaNoMes, 0).toFixed(2));
+
+        setResultado(newRes);
+        showToast(`✓ ${aluna.nome} inserida na sessão`);
+    }, [resultado]);
 
     const confirmExclusao = useCallback(() => {
         if (!resultado) return;
@@ -1030,7 +1153,7 @@ export default function CalculoPage() {
                         </div>
                     ) : (
                         resultadoFiltrado!.professores.map((prof) => (
-                            <ProfessorCard key={prof.idProfessorEvo} prof={prof} mes={mes} ano={ano} onGerarPDF={gerarPDF} onExcluirAluna={handleExcluirAluna} />
+                            <ProfessorCard key={prof.idProfessorEvo} prof={prof} mes={mes} ano={ano} onGerarPDF={gerarPDF} onExcluirAluna={handleExcluirAluna} onInserirAluna={handleInserirAluna} allAlunas={todasAlunas} />
                         ))
                     )}
 

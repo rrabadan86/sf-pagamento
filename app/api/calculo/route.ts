@@ -369,7 +369,7 @@ export async function GET(req: NextRequest) {
                         let explicitMonths = 0;
                         if (nameLower.includes("anual")) explicitMonths = 12;
                         else if (nameLower.includes("semestral")) explicitMonths = 6;
-                        else if (nameLower.includes("trimestral")) explicitMonths = 3;
+                        else if (nameLower.includes("trimestral") || nameLower.includes("trim.") || nameLower.includes(" trm ") || nameLower.startsWith("trm ") || nameLower.includes(" trm")) explicitMonths = 3;
                         else if (nameLower.includes("bimestral")) explicitMonths = 2;
                         else if (nameLower.includes("mensal")) explicitMonths = 1;
 
