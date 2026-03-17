@@ -10,9 +10,10 @@ export const dynamic = 'force-dynamic'; // Evita cache agressivo do Next.js na r
 export async function GET(request: NextRequest) {
     // 1. Validar a Secret do CRON para evitar execuções maliciosas públicas
     const authHeader = request.headers.get("authorization");
+    const secretParam = request.nextUrl.searchParams.get("secret");
     const cronSecret = process.env.CRON_SECRET;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && secretParam !== cronSecret) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -142,13 +143,15 @@ export async function GET(request: NextRequest) {
         // --- 3. SINCRONIZAR GRADES FIXAS DOS ALUNOS (apenas dias 1,5,10,15,20,25) ---
         // A grade fixa muda raramente. Sincronizar 6x/mês economiza ~480 requisições,
         // mantendo o total dentro das 1.000/mês do plano EVO Black.
+        // Use ?forceGrade=true para forçar a sincronização em qualquer dia.
         const DIAS_COM_GRADE = [1, 5, 10, 15, 20, 25];
         const diaDoMes = parseInt(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[2]);
-        const deveRodarGrade = DIAS_COM_GRADE.includes(diaDoMes);
+        const forceGrade = request.nextUrl.searchParams.get("forceGrade") === "true";
+        const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
 
         let countGrades = 0;
         if (deveRodarGrade) {
-            console.log(`[CRON] Dia ${diaDoMes} — sincronizando grades fixas...`);
+            console.log(`[CRON] Dia ${diaDoMes} — sincronizando grades fixas...${forceGrade ? ' (FORÇADO)' : ''}`);
             const alunosSalvos = await prisma.aluno.findMany({ select: { idEvo: true } });
             const idsParaGrade = alunosSalvos.map(a => parseInt(a.idEvo)).filter(id => !isNaN(id));
 
@@ -162,6 +165,9 @@ export async function GET(request: NextRequest) {
                 await Promise.all(chunk.map(async (idMember) => {
                     try {
                         const grades = await getMemberFixedSchedules(idMember);
+                        // Ordenar para que registros ativos (status=1) sejam processados POR ÚLTIMO,
+                        // garantindo que sobrescrevam os removidos (status=2) no upsert com mesma chave.
+                        grades.sort((a, b) => (b.status ?? 1) - (a.status ?? 1)); // status=2 primeiro, status=1 depois
                         for (const g of grades) {
                             if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
                             await prisma.gradeFixaAluno.upsert({
