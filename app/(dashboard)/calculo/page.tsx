@@ -987,10 +987,17 @@ export default function CalculoPage() {
 
             if (!response.ok) throw new Error("Erro na geração do PDF");
 
-            // Recebe blob do PDF e abre numa nova aba temporária
+            // Recebe blob do PDF e faz download direto (compatível com Edge/Chrome)
             const blob = await response.blob();
             const pdfUrl = URL.createObjectURL(blob);
-            window.open(pdfUrl, "_blank");
+            const mesStr2 = String(mes).padStart(2, "0");
+            const link = document.createElement("a");
+            link.href = pdfUrl;
+            link.download = `pagamento_${prof.nomeProfessor.replace(/\s+/g, "_")}_${ano}_${mesStr2}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(pdfUrl), 5000);
 
             showToast(`✓ PDF gerado para ${prof.nomeProfessor}`);
         } catch {
