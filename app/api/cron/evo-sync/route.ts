@@ -168,7 +168,12 @@ export async function GET(request: NextRequest) {
                         // quando compartilham a mesma chave (idAluno, idActivity, weekDay, startTime)
                         const gradesSorted = [...grades].sort((a, b) => {
                             // status=2 primeiro, status=1 por último (vence no upsert)
-                            return (b.status ?? 1) - (a.status ?? 1);
+                            const statusDiff = (b.status ?? 1) - (a.status ?? 1);
+                            if (statusDiff !== 0) return statusDiff;
+                            // Tiebreaker: endDate ascendente (último = endDate mais recente vence o upsert)
+                            const aEnd = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+                            const bEnd = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+                            return aEnd - bEnd;
                         });
                         for (const g of gradesSorted) {
                             if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
