@@ -377,7 +377,7 @@ export function RelatorioPDF({
                                     </View>
                                     <View style={{ alignItems: "flex-end", flexDirection: "row", gap: 6 }}>
                                         {dia.pisoAplicado && <Text style={{ fontSize: 7, color: "#eab308", paddingRight: 4 }}>Piso aplicado</Text>}
-                                        {dia.tetoAplicado && <Text style={{ fontSize: 7, color: "#ef4444", paddingRight: 4 }}>Teto aplicado</Text>}
+
                                         <View style={{ alignItems: "flex-end" }}>
                                             <Text style={{ fontSize: 9, fontFamily: "Helvetica-Bold", color: "#334155" }}>
                                                 {fmt(dia.totalDiaNoMes)}
@@ -410,12 +410,13 @@ export function RelatorioPDF({
                                     </View>
                                 ))}
 
-                                <View style={s.turmaFooter}>
-                                    <Text style={{ fontSize: 7, color: "#64748b" }}>
-                                        Bruto s/ trava: {fmt(dia.totalBrutoPorAula)}
-                                        {dia.pisoAplicado ? " → Ajustado (Piso R$55)" : dia.tetoAplicado ? " → Ajustado (Teto R$90)" : ""}
-                                    </Text>
-                                </View>
+                                {dia.pisoAplicado && (
+                                    <View style={s.turmaFooter}>
+                                        <Text style={{ fontSize: 7, color: "#64748b" }}>
+                                            Piso aplicado (R$55)
+                                        </Text>
+                                    </View>
+                                )}
                             </View>
                         ))}
                     </View>
