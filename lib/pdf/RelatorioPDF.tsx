@@ -251,8 +251,17 @@ export function RelatorioPDF({
                     const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
                     type Cell = { totalMes: number; totalSomaAula: number; qtdAulas: number };
                     const matriz = new Map<string, Map<string, Cell>>();
-                    // Track how many times each weekday occurs in the month (e.g., 4 Mondays, 5 Tuesdays)
-                    const weekdayAulasCount = new Map<string, number>();
+                    // Calculate how many times each weekday occurs in the month from calendar
+                    const weekdayCountMap: Record<string, number> = {};
+                    {
+                        const jsWeekdayToName = [/* 0=Sun */ "", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+                        const daysInMonth = new Date(ano, mes, 0).getDate();
+                        for (let day = 1; day <= daysInMonth; day++) {
+                            const dow = new Date(ano, mes - 1, day).getDay(); // 0=Sun
+                            const name = jsWeekdayToName[dow];
+                            if (name) weekdayCountMap[name] = (weekdayCountMap[name] || 0) + 1;
+                        }
+                    }
 
                     const extractTime = (nome: string) => {
                         const m = nome.match(/\d{2}h\d{2}|\d{2}:\d{2}|\d{2}h/);
@@ -275,9 +284,6 @@ export function RelatorioPDF({
                             cell.totalMes += d.totalDiaNoMes;
                             cell.totalSomaAula += d.valorFinalPorAula;
                             cell.qtdAulas += 1;
-                            // Keep the max totalAulasNoMes for this weekday (all entries for the same weekday should have the same count)
-                            const current = weekdayAulasCount.get(dm[1]) ?? 0;
-                            if (d.totalAulasNoMes > current) weekdayAulasCount.set(dm[1], d.totalAulasNoMes);
                         });
                     });
 
@@ -311,7 +317,7 @@ export function RelatorioPDF({
                                     <Text style={{ fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b" }}>Horário</Text>
                                 </View>
                                 {cols.map(c => {
-                                    const count = weekdayAulasCount.get(c);
+                                    const count = weekdayCountMap[c];
                                     return (
                                         <View key={c} style={{ width: colW, alignItems: "center" }}>
                                             <Text style={{ fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b" }}>{c}</Text>
