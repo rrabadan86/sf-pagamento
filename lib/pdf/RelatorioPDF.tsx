@@ -251,6 +251,8 @@ export function RelatorioPDF({
                     const cols = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
                     type Cell = { totalMes: number; totalSomaAula: number; qtdAulas: number };
                     const matriz = new Map<string, Map<string, Cell>>();
+                    // Track how many times each weekday occurs in the month (e.g., 4 Mondays, 5 Tuesdays)
+                    const weekdayAulasCount = new Map<string, number>();
 
                     const extractTime = (nome: string) => {
                         const m = nome.match(/\d{2}h\d{2}|\d{2}:\d{2}|\d{2}h/);
@@ -273,6 +275,9 @@ export function RelatorioPDF({
                             cell.totalMes += d.totalDiaNoMes;
                             cell.totalSomaAula += d.valorFinalPorAula;
                             cell.qtdAulas += 1;
+                            // Keep the max totalAulasNoMes for this weekday (all entries for the same weekday should have the same count)
+                            const current = weekdayAulasCount.get(dm[1]) ?? 0;
+                            if (d.totalAulasNoMes > current) weekdayAulasCount.set(dm[1], d.totalAulasNoMes);
                         });
                     });
 
@@ -280,15 +285,42 @@ export function RelatorioPDF({
                     const colW = 65;
                     const hW = 40;
 
+                    // Compute column totals for the summary row
+                    const colTotals = new Map<string, { totalMes: number; totalSomaAula: number; qtdHorarios: number }>();
+                    cols.forEach(col => {
+                        let totalMes = 0;
+                        let totalSomaAula = 0;
+                        let qtdHorarios = 0;
+                        rows.forEach(time => {
+                            const cell = matriz.get(time)?.get(col);
+                            if (cell) {
+                                totalMes += cell.totalMes;
+                                totalSomaAula += cell.totalSomaAula;
+                                qtdHorarios += cell.qtdAulas;
+                            }
+                        });
+                        colTotals.set(col, { totalMes, totalSomaAula, qtdHorarios });
+                    });
+
                     return (
                         <View style={{ marginBottom: 20 }}>
                             <Text style={[s.sectionTitle, { marginTop: 0 }]}>Matriz de Horários — {professor.nomeProfessor.split(" ")[0]}</Text>
                             {/* Cabeçalho */}
                             <View style={{ flexDirection: "row", backgroundColor: "#f1f5f9", padding: "5 6", borderRadius: 3, marginBottom: 2 }}>
-                                <Text style={{ width: hW, fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b" }}>Horário</Text>
-                                {cols.map(c => (
-                                    <Text key={c} style={{ width: colW, fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b", textAlign: "center" }}>{c}</Text>
-                                ))}
+                                <View style={{ width: hW }}>
+                                    <Text style={{ fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b" }}>Horário</Text>
+                                </View>
+                                {cols.map(c => {
+                                    const count = weekdayAulasCount.get(c);
+                                    return (
+                                        <View key={c} style={{ width: colW, alignItems: "center" }}>
+                                            <Text style={{ fontSize: 7, fontFamily: "Helvetica-Bold", color: "#64748b" }}>{c}</Text>
+                                            {count != null && count > 0 && (
+                                                <Text style={{ fontSize: 6, color: "#94a3b8", marginTop: 1 }}>{count}x no mês</Text>
+                                            )}
+                                        </View>
+                                    );
+                                })}
                             </View>
                             {/* Linhas */}
                             {rows.map((time, ri) => (
@@ -309,6 +341,21 @@ export function RelatorioPDF({
                                     })}
                                 </View>
                             ))}
+                            {/* Linha de Totais */}
+                            <View style={{ flexDirection: "row", padding: "6 6", backgroundColor: "#0f172a", borderRadius: 3, marginTop: 2, alignItems: "center" }}>
+                                <Text style={{ width: hW, fontSize: 7, fontFamily: "Helvetica-Bold", color: "#94a3b8" }}>Total</Text>
+                                {cols.map(col => {
+                                    const tot = colTotals.get(col)!;
+                                    if (tot.qtdHorarios === 0) return <Text key={col} style={{ width: colW, fontSize: 7, color: "#475569", textAlign: "center" }}>—</Text>;
+                                    const mediaCol = tot.totalSomaAula / tot.qtdHorarios;
+                                    return (
+                                        <View key={col} style={{ width: colW, alignItems: "center" }}>
+                                            <Text style={{ fontSize: 6.5, fontFamily: "Helvetica-Bold", color: "#818cf8" }}>{fmt(mediaCol)}/aula</Text>
+                                            <Text style={{ fontSize: 6, color: "#94a3b8", marginTop: 1 }}>{fmt(tot.totalMes)}</Text>
+                                        </View>
+                                    );
+                                })}
+                            </View>
                         </View>
                     );
                 })()}
