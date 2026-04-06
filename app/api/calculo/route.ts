@@ -353,8 +353,15 @@ export async function GET(req: NextRequest) {
                             aScore += isVigenteA * 20;
                             bScore += isVigenteB * 20;
 
-                            // Tiebreaker pela maior validade
-                            if (aScore === bScore) return bEnd.getTime() - aEnd.getTime();
+                            if (aScore === bScore) {
+                                // Priorizar contrato com valor > 0 (evita selecionar placeholders com R$ 0)
+                                const aHasValue = a.saleValue > 0 ? 1 : 0;
+                                const bHasValue = b.saleValue > 0 ? 1 : 0;
+                                if (aHasValue !== bHasValue) return bHasValue - aHasValue;
+
+                                // Tiebreaker pela maior validade
+                                return bEnd.getTime() - aEnd.getTime();
+                            }
 
                             return bScore - aScore;
                         });

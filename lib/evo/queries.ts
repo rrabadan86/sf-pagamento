@@ -61,9 +61,19 @@ export async function getSchedule(
     ano: number
 ): Promise<EvoSchedule[]> {
     const mesStr = String(mes).padStart(2, "0");
-    const datesToFetch = [1, 8, 15, 22, 28].map(
-        (day) => `${ano}-${mesStr}-${String(day).padStart(2, "0")}`
-    );
+    // Calcular as semanas a buscar, garantindo cobertura de todas as semanas do mês.
+    // Antes era [1, 8, 15, 22, 28] fixo, mas isso perdia dias 29-31 quando caíam
+    // em semana diferente do dia 28 (ex: Março 2026, dia 28=Sáb → 29-31 na semana seguinte).
+    const diasNoMes = new Date(ano, mes, 0).getDate();
+    const datesToFetch: string[] = [];
+    for (let day = 1; day <= diasNoMes; day += 7) {
+        datesToFetch.push(`${ano}-${mesStr}-${String(day).padStart(2, "0")}`);
+    }
+    // Garantir que o último dia do mês seja coberto
+    const lastFetchedDay = parseInt(datesToFetch[datesToFetch.length - 1].split("-")[2]);
+    if (lastFetchedDay + 6 < diasNoMes) {
+        datesToFetch.push(`${ano}-${mesStr}-${String(diasNoMes).padStart(2, "0")}`);
+    }
 
     const allActivities: EvoSchedule[] = [];
     const seenIds = new Set<string>();

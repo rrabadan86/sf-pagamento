@@ -1231,69 +1231,8 @@ export default function CalculoPage() {
                 </div>
             )}
 
-            {/* MODAL DE EXCLUSÃO DE ALUNA */}
-            {modalExclusao.open && (
-                <div style={{
-                    position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-                    backgroundColor: "rgba(15, 23, 42, 0.75)", zIndex: 9999,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    backdropFilter: "blur(4px)"
-                }}>
-                    <div className="card" style={{ width: 480, padding: 28, boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)", border: "1px solid var(--border)" }}>
-                        <h3 style={{ marginTop: 0, marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: "var(--text)" }}>
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--red)" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
-                            Confirmar Exclusão
-                        </h3>
-                        <p style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 24, lineHeight: 1.5 }}>
-                            Você está removendo a aluna <strong style={{ color: "var(--text)" }}>{modalExclusao.nomeAluna}</strong> {
-                                modalExclusao.escopo === "global"
-                                    ? <span style={{ color: "var(--red)", fontWeight: 600 }}>de todas as academias e professores definitivamente no mês</span>
-                                    : <span>da sessão de <strong>{modalExclusao.diaString}</strong> na turma <strong>{modalExclusao.nomeTurma}</strong></span>
-                            }. O recálculo ocorrerá automaticamente.
-                        </p>
 
-                        <div className="form-group">
-                            <label style={{ fontWeight: 600 }}>Motivo da exclusão *</label>
-                            <input
-                                type="text"
-                                className="input"
-                                placeholder="Ex: Contrato encerrado em Dezembro"
-                                value={modalExclusao.motivo}
-                                onChange={e => setModalExclusao({ ...modalExclusao, motivo: e.target.value })}
-                                autoFocus
-                            />
-                        </div>
 
-                        {modalExclusao.escopo === "global" ? (
-                            <div style={{ padding: "16px", backgroundColor: "#fef2f2", color: "var(--red)", borderRadius: 8, marginTop: 20, border: "1px dashed #fca5a5" }}>
-                                <strong style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
-                                    Remoção Global Invocada
-                                </strong>
-                                <p style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5, color: "#991b1b" }}>Ao confirmar, o sistema procurará o contrato de <strong>{modalExclusao.nomeAluna}</strong> e a removerá de <strong>todas as sessões independentemente de qual professora</strong>.</p>
-                            </div>
-                        ) : (
-                            <label style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: "var(--text)", padding: "16px", backgroundColor: "var(--bg-secondary)", borderRadius: 8, border: "1px solid var(--border)", cursor: "pointer", marginTop: 20 }}>
-                                <input
-                                    type="checkbox"
-                                    style={{ width: 18, height: 18, accentColor: "var(--red)", cursor: "pointer", marginTop: 2 }}
-                                    checked={modalExclusao.escopo === "prof"}
-                                    onChange={e => setModalExclusao({ ...modalExclusao, escopo: e.target.checked ? "prof" : "sessao" })}
-                                />
-                                <span style={{ lineHeight: 1.4 }}>
-                                    <strong style={{ display: "block", marginBottom: 2 }}>Remoção em Massa (Professora Atual)</strong>
-                                    Remover <strong>{modalExclusao.nomeAluna}</strong> de absolutamente todas as sessões apenas desta professora neste mês.
-                                </span>
-                            </label>
-                        )}
-
-                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 28 }}>
-                            <button className="btn" style={{ backgroundColor: "var(--bg)", color: "var(--text)" }} onClick={() => setModalExclusao({ ...modalExclusao, open: false })}>Cancelar</button>
-                            <button className="btn" style={{ backgroundColor: "var(--red)", color: "white", fontWeight: 600 }} onClick={confirmExclusao}>Excluir e Recalcular</button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {toast && <div className="toast toast-success">{toast}</div>}
         </div>
