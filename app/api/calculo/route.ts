@@ -5,7 +5,7 @@ import { getSchedule, getMemberMemberships, getMemberMembershipsById, EvoSchedul
 import { getTurmaEnrollments, EvoEnrollment, getMemberFixedSchedules, EvoFixedSchedule } from "@/lib/evo/enrollments";
 import { calcularDiaDaSemana, contribuicaoFixa, CONTRIBUICAO_FREE, round2, contarAulasMes, DIAS_SEMANA, AlunaCalculo, ResultadoProfessor, ResultadoTurma, ResultadoDiaDaSemana } from "@/lib/calculos";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
     // ---- AUTENTICAÇÃO ----
@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
         const sessionEnrollmentsCache = new Map<number, EvoEnrollment[]>();
         const allSessionIds = schedule.map(a => a.idAtividadeSessao).filter((id): id is number => id != null);
         
-        const sessionChunks = chunkArray(allSessionIds, 10);
+        const sessionChunks = chunkArray(allSessionIds, 3);
         for (const chunk of sessionChunks) {
             await Promise.all(
                 chunk.map(async (sessId) => {
