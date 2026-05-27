@@ -131,12 +131,27 @@ export async function getMemberMemberships(
         take: 50,
     });
 
-    const todas = new Map<number, EvoMemberMembership>();
+    // Deduplicação por contrato: evita contar o mesmo contrato duas vezes se aparecer em ambas as listas.
+    // Usamos idMember+campos combinados pois o EVO pode retornar o ID do contrato como "idMemberMemberShip" (S maiúsculo)
+    // em vez de "idMemberMembership" (s minúsculo). Usar o campo diretamente causaria tudo ir p/ chave `undefined`.
+    const seenKeys = new Set<string>();
+    const todas: EvoMemberMembership[] = [];
     for (const m of [...ativas, ...canceladas]) {
-        todas.set(m.idMemberMembership, m);
+        const contractId = (m as any).idMemberMemberShip ?? m.idMemberMembership;
+        const key = contractId != null ? String(contractId) : `${m.idMember}_${m.membershipStart}`;
+        if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            todas.push(m);
+        }
     }
 
-    return Array.from(todas.values());
+    console.log(`[getMemberMemberships] EVO: ${ativas.length} ativas + ${canceladas.length} canceladas = ${todas.length} contratos únicos`);
+    if (todas.length > 0) {
+        const s = todas[0] as any;
+        console.log(`[getMemberMemberships] Amostra: idMember=${s.idMember}, name=${s.name}, nameMembership=${s.nameMembership}`);
+    }
+
+    return todas;
 }
 
 /**
