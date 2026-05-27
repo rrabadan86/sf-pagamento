@@ -32,9 +32,11 @@ export async function GET(req: NextRequest) {
             schedule = JSON.parse(cachedSchedule.dados);
             console.log(`[Cálculo] Grade lida do cache (${schedule.length} sessões)`);
         } else {
-            // Fallback: buscar da EVO API (só se o cron nunca rodou para este mês)
-            console.log(`[Cálculo] Cache não encontrado para ${mes}/${ano}, buscando da EVO API...`);
-            schedule = await getSchedule(mes, ano);
+            // Cache não existe — cron precisa rodar primeiro para popular os dados
+            console.log(`[Cálculo] Cache não encontrado para ${mes}/${ano}`);
+            return NextResponse.json({
+                error: `Dados de ${mes}/${ano} ainda não foram sincronizados. Execute o sincronizador primeiro.`
+            }, { status: 503 });
         }
 
         // 2. Buscar matrículas do mês no banco local
@@ -108,19 +110,10 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        // Fallback: sessões sem dados no banco (ex: cron ainda não rodou) → buscar da EVO API
+        // Sessões sem dados no banco são tratadas como vazio (cron precisa rodar primeiro)
         const sessoesSemDados = allSessionIds.filter(id => !sessionEnrollmentsCache.has(id));
         if (sessoesSemDados.length > 0) {
-            console.log(`[Cálculo] Fallback EVO para ${sessoesSemDados.length} sessão(ões) sem enrollment no banco.`);
-            const sessionChunks = chunkArray(sessoesSemDados, 3);
-            for (const chunk of sessionChunks) {
-                await Promise.all(
-                    chunk.map(async (sessId) => {
-                        const enrollments = await getTurmaEnrollments(sessId);
-                        sessionEnrollmentsCache.set(sessId, enrollments);
-                    })
-                );
-            }
+            console.log(`[Cálculo] ${sessoesSemDados.length} sessão(ões) sem enrollment no banco (aguardando cron).`);
         }
 
         // Mega Cache das Grades Fixas dos alunos
@@ -152,19 +145,10 @@ export async function GET(req: NextRequest) {
             alunosComGradeNoBanco.add(id);
         }
 
-        // 2. Fallback: alunos sem grade no banco → buscar da EVO (ex: alunos novos)
+        // Alunos sem grade no banco são ignorados (cron precisa rodar primeiro para popular)
         const idsParaFallback = idsMatriculados.filter(id => !alunosComGradeNoBanco.has(id));
         if (idsParaFallback.length > 0) {
-            console.log(`[Cálculo] Fallback EVO para ${idsParaFallback.length} aluno(s) sem grade no banco.`);
-            const chunkArray = <T>(arr: T[], size: number) =>
-                Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size));
-            const chunkedFallback = chunkArray(idsParaFallback, 15);
-            for (const chunk of chunkedFallback) {
-                await Promise.all(chunk.map(async (idMem) => {
-                    const fixedScheduleArray = await getMemberFixedSchedules(idMem);
-                    matriculasFixasGlobal.set(idMem, fixedScheduleArray);
-                }));
-            }
+            console.log(`[Cálculo] ${idsParaFallback.length} aluno(s) sem grade fixa no banco (aguardando cron).`);
         }
 
         // 4. Sincronizar professores novos (percentual padrão 20%) + buscar percentual vigente
