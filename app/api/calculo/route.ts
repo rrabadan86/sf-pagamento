@@ -23,10 +23,21 @@ export async function GET(req: NextRequest) {
     }
 
     try {
-        // 1. Buscar grade de aulas do mês na API EVO
-        const schedule = await getSchedule(mes, ano);
+        // 1. Buscar grade de aulas do mês — preferencialmente do cache local (populado pelo cron)
+        const cacheKey = `schedule_${mes}_${ano}`;
+        const cachedSchedule = await prisma.cacheJSON.findUnique({ where: { chave: cacheKey } });
+        
+        let schedule: EvoSchedule[];
+        if (cachedSchedule) {
+            schedule = JSON.parse(cachedSchedule.dados);
+            console.log(`[Cálculo] Grade lida do cache (${schedule.length} sessões)`);
+        } else {
+            // Fallback: buscar da EVO API (só se o cron nunca rodou para este mês)
+            console.log(`[Cálculo] Cache não encontrado para ${mes}/${ano}, buscando da EVO API...`);
+            schedule = await getSchedule(mes, ano);
+        }
 
-        // 2. Buscar matrículas do mês na API EVO
+        // 2. Buscar matrículas do mês no banco local
         const memberships = await getMemberMemberships(mes, ano);
 
         // 3. Buscar percentuais vigentes no 1º dia do mês

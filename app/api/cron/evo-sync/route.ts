@@ -239,6 +239,16 @@ export async function GET(request: NextRequest) {
             console.log(`[CRON] Sincronizando enrollments de ${mesSync}/${anoSync}...`);
             try {
                 const schedule = await getSchedule(mesSync, anoSync);
+                
+                // Cachear a grade completa como JSON para que o /api/calculo não precise chamar a EVO
+                const cacheKey = `schedule_${mesSync}_${anoSync}`;
+                await prisma.cacheJSON.upsert({
+                    where: { chave: cacheKey },
+                    update: { dados: JSON.stringify(schedule) },
+                    create: { chave: cacheKey, dados: JSON.stringify(schedule) },
+                });
+                console.log(`[CRON] Grade de ${mesSync}/${anoSync} cacheada (${schedule.length} sessões)`);
+                
                 const sessionIds = schedule
                     .map(a => a.idAtividadeSessao)
                     .filter((id): id is number => id != null);

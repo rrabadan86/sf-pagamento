@@ -130,3 +130,9 @@ model EnrollmentSessao {
   @@unique([idAtividadeSessao, idMember])
   @@index([idAtividadeSessao])
 }
+
+model CacheJSON {
+  chave        String   @id
+  dados        String   // JSON stringified
+  atualizadoEm DateTime @updatedAt
+}
