@@ -117,28 +117,26 @@ export async function getMemberMemberships(
     mes: number,
     ano: number
 ): Promise<EvoMemberMembership[]> {
-    const dataInicioBusca = new Date(ano, mes - 1, 1);
-    const dataFimBusca = new Date(ano, mes, 0, 23, 59, 59); // último dia do mês
+    const mesStr = String(mes).padStart(2, "0");
+    const dataInicio = `${ano}-${mesStr}-01`;
 
-    // Busca todos os contratos no BD que tenham sobreposição com o mês
-    // ou que não tenham data de fim definida (vitalicios/recorrentes)
-    // O Prisma espera que a data seja string baseada no model (DateTime não nulo) 
-    // ou usamos a comparação de datas adequadamente.
-    const contratos = await prisma.contrato.findMany({
-        where: {
-            OR: [
-                {
-                    dataInicio: { lte: dataFimBusca },
-                    dataFim: { gte: dataInicioBusca }
-                }
-            ]
-        },
-        include: {
-            aluno: true
-        }
+    const ativas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+        statusMemberMembership: 1,
+        take: 50,
     });
 
-    return contratos.map((c: any) => mapPrismaToEvoMembership(c));
+    const canceladas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+        statusMemberMembership: 2,
+        cancelDateStart: dataInicio,
+        take: 50,
+    });
+
+    const todas = new Map<number, EvoMemberMembership>();
+    for (const m of [...ativas, ...canceladas]) {
+        todas.set(m.idMemberMembership, m);
+    }
+
+    return Array.from(todas.values());
 }
 
 /**
