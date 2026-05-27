@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { evoFetchPaginated } from "@/lib/evo/client";
-import { getMemberFixedSchedules } from "@/lib/evo/enrollments";
+import { getMemberFixedSchedules, getTurmaEnrollments } from "@/lib/evo/enrollments";
+import { getSchedule } from "@/lib/evo/queries";
 
 // Vercel Cron Limits: Até 10s no Hobby, até 60s no Pro/Premium. Pro maxDuration: 300
 export const maxDuration = 300; 
@@ -214,6 +215,79 @@ export async function GET(request: NextRequest) {
             console.log(`[CRON] Dia ${diaDoMes} — grade fixa não agendada para hoje (próxima: dias 1,5,10,15,20,25).`);
         }
 
+        // --- 4. SINCRONIZAR ENROLLMENTS DAS SESSÕES (mês atual + mês anterior) ---
+        // Busca a grade de aulas (sessões) e para cada sessão, busca os enrollments da EVO API.
+        // Isso elimina a necessidade de ~100 chamadas à EVO durante o cálculo de remuneração,
+        // que é o principal causador do timeout 504.
+        let countEnrollments = 0;
+        const agora = new Date();
+        const mesAtualBRT = parseInt(agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[1]);
+        const anoAtualBRT = parseInt(agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[0]);
+
+        // Meses para sincronizar: atual e anterior (para recálculos do mês passado)
+        const mesesParaSync: { mes: number; ano: number }[] = [
+            { mes: mesAtualBRT, ano: anoAtualBRT },
+        ];
+        // Mês anterior
+        if (mesAtualBRT === 1) {
+            mesesParaSync.push({ mes: 12, ano: anoAtualBRT - 1 });
+        } else {
+            mesesParaSync.push({ mes: mesAtualBRT - 1, ano: anoAtualBRT });
+        }
+
+        for (const { mes: mesSync, ano: anoSync } of mesesParaSync) {
+            console.log(`[CRON] Sincronizando enrollments de ${mesSync}/${anoSync}...`);
+            try {
+                const schedule = await getSchedule(mesSync, anoSync);
+                const sessionIds = schedule
+                    .map(a => a.idAtividadeSessao)
+                    .filter((id): id is number => id != null);
+
+                console.log(`[CRON] ${sessionIds.length} sessões encontradas em ${mesSync}/${anoSync}`);
+
+                // Buscar enrollments em batches de 3 (respeitando rate limit da EVO)
+                const chunkArray = <T>(arr: T[], size: number) =>
+                    Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size));
+
+                const sessionChunks = chunkArray(sessionIds, 3);
+                for (const chunk of sessionChunks) {
+                    await Promise.all(chunk.map(async (sessId) => {
+                        try {
+                            const enrollments = await getTurmaEnrollments(sessId);
+                            for (const e of enrollments) {
+                                if (!e.idMember) continue;
+                                await prisma.enrollmentSessao.upsert({
+                                    where: {
+                                        idAtividadeSessao_idMember: {
+                                            idAtividadeSessao: sessId,
+                                            idMember: e.idMember,
+                                        }
+                                    },
+                                    update: {
+                                        nome: e.name || "",
+                                        replacement: e.replacement ?? false,
+                                        status: e.status ?? 0,
+                                    },
+                                    create: {
+                                        idAtividadeSessao: sessId,
+                                        idMember: e.idMember,
+                                        nome: e.name || "",
+                                        replacement: e.replacement ?? false,
+                                        status: e.status ?? 0,
+                                    }
+                                });
+                                countEnrollments++;
+                            }
+                        } catch (err) {
+                            console.warn(`[CRON] Erro ao buscar enrollments da sessão ${sessId}:`, err);
+                        }
+                    }));
+                }
+            } catch (err) {
+                console.warn(`[CRON] Erro ao sincronizar enrollments de ${mesSync}/${anoSync}:`, err);
+            }
+        }
+
         console.log("=== CRON DE SINCRONIZAÇÃO CONCLUÍDO ===");
 
         return NextResponse.json({ 
@@ -223,7 +297,8 @@ export async function GET(request: NextRequest) {
                 alunosVerificados: countAlunos,
                 contratosAtualizados: countContratos,
                 checkinsDeOntemSalvos: countCheckins,
-                gradesFixasSalvas: countGrades
+                gradesFixasSalvas: countGrades,
+                enrollmentsSalvos: countEnrollments
             }
         });
 
@@ -232,3 +307,6 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Failed to sync EVO data", details: error.message }, { status: 500 });
     }
 }
+
+
+

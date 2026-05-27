@@ -117,3 +117,16 @@ model GradeFixaAluno {
   @@unique([idAluno, idActivity, weekDay, startTime])
   @@index([idAluno])
 }
+
+model EnrollmentSessao {
+  id                Int      @id @default(autoincrement())
+  idAtividadeSessao Int
+  idMember          Int
+  nome              String
+  replacement       Boolean  @default(false)
+  status            Int      @default(0) // 0=Present, 1=Absent
+  atualizadoEm      DateTime @updatedAt
+
+  @@unique([idAtividadeSessao, idMember])
+  @@index([idAtividadeSessao])
+}

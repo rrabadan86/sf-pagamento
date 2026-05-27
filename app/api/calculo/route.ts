@@ -79,14 +79,37 @@ export async function GET(req: NextRequest) {
         const sessionEnrollmentsCache = new Map<number, EvoEnrollment[]>();
         const allSessionIds = schedule.map(a => a.idAtividadeSessao).filter((id): id is number => id != null);
         
-        const sessionChunks = chunkArray(allSessionIds, 3);
-        for (const chunk of sessionChunks) {
-            await Promise.all(
-                chunk.map(async (sessId) => {
-                    const enrollments = await getTurmaEnrollments(sessId);
-                    sessionEnrollmentsCache.set(sessId, enrollments);
-                })
-            );
+        // OTIMIZAÇÃO: Ler enrollments do banco local (populado pelo cron noturno).
+        // Isso elimina ~100 chamadas à EVO API que causavam timeout 504 no Vercel.
+        const enrollmentsDb = await prisma.enrollmentSessao.findMany({
+            where: { idAtividadeSessao: { in: allSessionIds } }
+        });
+
+        for (const e of enrollmentsDb) {
+            if (!sessionEnrollmentsCache.has(e.idAtividadeSessao)) {
+                sessionEnrollmentsCache.set(e.idAtividadeSessao, []);
+            }
+            sessionEnrollmentsCache.get(e.idAtividadeSessao)!.push({
+                idMember: e.idMember,
+                name: e.nome,
+                replacement: e.replacement,
+                status: e.status,
+            });
+        }
+
+        // Fallback: sessões sem dados no banco (ex: cron ainda não rodou) → buscar da EVO API
+        const sessoesSemDados = allSessionIds.filter(id => !sessionEnrollmentsCache.has(id));
+        if (sessoesSemDados.length > 0) {
+            console.log(`[Cálculo] Fallback EVO para ${sessoesSemDados.length} sessão(ões) sem enrollment no banco.`);
+            const sessionChunks = chunkArray(sessoesSemDados, 3);
+            for (const chunk of sessionChunks) {
+                await Promise.all(
+                    chunk.map(async (sessId) => {
+                        const enrollments = await getTurmaEnrollments(sessId);
+                        sessionEnrollmentsCache.set(sessId, enrollments);
+                    })
+                );
+            }
         }
 
         // Mega Cache das Grades Fixas dos alunos
