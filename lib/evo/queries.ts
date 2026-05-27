@@ -117,41 +117,42 @@ export async function getMemberMemberships(
     mes: number,
     ano: number
 ): Promise<EvoMemberMembership[]> {
-    const mesStr = String(mes).padStart(2, "0");
-    const dataInicio = `${ano}-${mesStr}-01`;
+    const dataInicioBusca = new Date(ano, mes - 1, 1);
+    const dataFimBusca = new Date(ano, mes, 0, 23, 59, 59);
 
-    const ativas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        statusMemberMembership: 1,
+    // Busca SEM filtro de status para pegar todos os contratos independentemente do status EVO.
+    // Planos "RECORRENTE" têm status diferente de 1 no EVO e eram ignorados antes. Filtramos
+    // por sobreposição de data no cliente para capturar apenas contratos vigentes no mês.
+    const todos = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
         take: 50,
     });
 
-    const canceladas = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        statusMemberMembership: 2,
-        cancelDateStart: dataInicio,
-        take: 50,
+    // Filtrar por vigência: contrato deve sobrepor o mês solicitado
+    const vigentes = todos.filter(m => {
+        const start = m.membershipStart ? new Date(m.membershipStart) : new Date(0);
+        const end = m.membershipEnd ? new Date(m.membershipEnd) : new Date("2099-01-01");
+        return start <= dataFimBusca && end >= dataInicioBusca;
     });
 
-    // Deduplicação por contrato: evita contar o mesmo contrato duas vezes se aparecer em ambas as listas.
-    // Usamos idMember+campos combinados pois o EVO pode retornar o ID do contrato como "idMemberMemberShip" (S maiúsculo)
-    // em vez de "idMemberMembership" (s minúsculo). Usar o campo diretamente causaria tudo ir p/ chave `undefined`.
+    // Deduplicar por ID do contrato (EVO pode retornar "idMemberMemberShip" com S maiúsculo)
     const seenKeys = new Set<string>();
-    const todas: EvoMemberMembership[] = [];
-    for (const m of [...ativas, ...canceladas]) {
+    const result: EvoMemberMembership[] = [];
+    for (const m of vigentes) {
         const contractId = (m as any).idMemberMemberShip ?? m.idMemberMembership;
         const key = contractId != null ? String(contractId) : `${m.idMember}_${m.membershipStart}`;
         if (!seenKeys.has(key)) {
             seenKeys.add(key);
-            todas.push(m);
+            result.push(m);
         }
     }
 
-    console.log(`[getMemberMemberships] EVO: ${ativas.length} ativas + ${canceladas.length} canceladas = ${todas.length} contratos únicos`);
-    if (todas.length > 0) {
-        const s = todas[0] as any;
+    console.log(`[getMemberMemberships] EVO: ${todos.length} total → ${result.length} vigentes em ${mes}/${ano}`);
+    if (result.length > 0) {
+        const s = result[0] as any;
         console.log(`[getMemberMemberships] Amostra: idMember=${s.idMember}, name=${s.name}, nameMembership=${s.nameMembership}`);
     }
 
-    return todas;
+    return result;
 }
 
 /**
