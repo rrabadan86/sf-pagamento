@@ -159,6 +159,27 @@ export async function getMemberMembershipsById(idMember: number): Promise<EvoMem
 }
 
 /**
+ * Busca todos os contratos de uma lista de alunos em uma única query.
+ * Retorna Map<idMember, contratos[]> — usado para eliminar N+1 no cálculo.
+ */
+export async function getMemberMembershipsForIds(
+    memberIds: number[]
+): Promise<Map<number, EvoMemberMembership[]>> {
+    if (memberIds.length === 0) return new Map();
+    const contratos = await prisma.contrato.findMany({
+        where: { idAluno: { in: memberIds.map(String) } },
+        include: { aluno: true }
+    });
+    const result = new Map<number, EvoMemberMembership[]>();
+    for (const c of contratos as any[]) {
+        const id = parseInt(c.idAluno);
+        if (!result.has(id)) result.set(id, []);
+        result.get(id)!.push(mapPrismaToEvoMembership(c));
+    }
+    return result;
+}
+
+/**
  * Helper de Conversão: Transforma os dados do Prisma numa estrutura igual à EvoMemberMembership
  * para não quebrar a tipagem do restante do código atual.
  */

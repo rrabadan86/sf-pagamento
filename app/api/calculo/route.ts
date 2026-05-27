@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
-import { getSchedule, getMemberMemberships, getMemberMembershipsById, EvoSchedule, EvoMemberMembership, statusContrato, temPagamentoNoMes, tipoDePlano } from "@/lib/evo/queries";
+import { getSchedule, getMemberMemberships, getMemberMembershipsForIds, EvoSchedule, EvoMemberMembership, statusContrato, temPagamentoNoMes, tipoDePlano } from "@/lib/evo/queries";
 import { getTurmaEnrollments, EvoEnrollment, getMemberFixedSchedules, EvoFixedSchedule } from "@/lib/evo/enrollments";
 import { calcularDiaDaSemana, contribuicaoFixa, CONTRIBUICAO_FREE, round2, contarAulasMes, DIAS_SEMANA, AlunaCalculo, ResultadoProfessor, ResultadoTurma, ResultadoDiaDaSemana } from "@/lib/calculos";
 
@@ -41,6 +41,13 @@ export async function GET(req: NextRequest) {
 
         // 2. Buscar matrículas do mês no banco local
         const memberships = await getMemberMemberships(mes, ano);
+
+        // Mapa por idMember para evitar buscas O(n) nos loops internos
+        const membershipsMap = new Map<number, EvoMemberMembership[]>();
+        for (const m of memberships) {
+            if (!membershipsMap.has(m.idMember)) membershipsMap.set(m.idMember, []);
+            membershipsMap.get(m.idMember)!.push(m);
+        }
 
         // 3. Buscar percentuais vigentes no 1º dia do mês
         const primeiroDia = new Date(ano, mes - 1, 1);
@@ -151,33 +158,55 @@ export async function GET(req: NextRequest) {
             console.log(`[Cálculo] ${idsParaFallback.length} aluno(s) sem grade fixa no banco (aguardando cron).`);
         }
 
-        // 4. Sincronizar professores novos (percentual padrão 20%) + buscar percentual vigente
-        const resultado: ResultadoProfessor[] = [];
+        // PRÉ-CARREGAMENTO: contratos de membros que aparecem nos enrollments mas não têm
+        // contrato vigente no mês (ex: alunas experimentais, VIP, contrato expirado).
+        // Elimina N+1 de getMemberMembershipsById no loop interno.
+        const missingMemberIds = new Set<number>();
+        for (const enrollments of sessionEnrollmentsCache.values()) {
+            for (const e of enrollments) {
+                if (e.idMember && !membershipsMap.has(e.idMember)) missingMemberIds.add(e.idMember);
+            }
+        }
+        for (const id of matriculasFixasGlobal.keys()) {
+            if (!membershipsMap.has(id)) missingMemberIds.add(id);
+        }
+        const fallbackContractsMap = missingMemberIds.size > 0
+            ? await getMemberMembershipsForIds(Array.from(missingMemberIds))
+            : new Map<number, EvoMemberMembership[]>();
+        console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos sem contrato vigente no mês.`);
 
-        for (const [pid, prof] of Object.entries(porProfessor)) {
-            // Garantir que o professor existe no BD
-            const existente = await prisma.professorPercentual.findFirst({
-                where: { idProfessorEvo: pid },
-                orderBy: { dataInicio: "desc" },
-            });
-            if (!existente) {
-                await prisma.professorPercentual.create({
+        // PRÉ-CARREGAMENTO: percentuais de todos os professores em uma única query
+        const profIds = Object.keys(porProfessor);
+        const percRecordsAll = await prisma.professorPercentual.findMany({
+            where: { idProfessorEvo: { in: profIds } },
+            orderBy: { dataInicio: "desc" },
+        });
+        // Mantém apenas o registro mais recente por professor
+        const percMapDb = new Map<string, typeof percRecordsAll[0]>();
+        for (const r of percRecordsAll) {
+            if (!percMapDb.has(r.idProfessorEvo)) percMapDb.set(r.idProfessorEvo, r);
+        }
+        // Cria registros para professores novos (ainda não cadastrados)
+        for (const pid of profIds) {
+            if (!percMapDb.has(pid)) {
+                const newRec = await prisma.professorPercentual.create({
                     data: {
                         idProfessorEvo: pid,
-                        nomeProfessor: prof.nomeProfessor,
+                        nomeProfessor: porProfessor[pid].nomeProfessor,
                         percentual: 20,
                         dataInicio: primeiroDia,
                     },
                 });
+                percMapDb.set(pid, newRec);
             }
+        }
 
-            // Pega as definições mais recentes (percentual, piso, teto) ativas para este professor
-            const percRecord = await prisma.professorPercentual.findFirst({
-                where: {
-                    idProfessorEvo: pid,
-                },
-                orderBy: { dataInicio: "desc" },
-            });
+        // 4. Calcular remuneração por professor
+        const resultado: ResultadoProfessor[] = [];
+
+        for (const [pid, prof] of Object.entries(porProfessor)) {
+            // Pega definições de percentual/piso/teto do map pré-carregado
+            const percRecord = percMapDb.get(pid);
             const percentual = percRecord?.percentual ?? 20;
 
             // 5. Calcular cada turma
@@ -263,8 +292,8 @@ export async function GET(req: NextRequest) {
                         });
 
                         if (ehOficialmenteDela) {
-                            const m = memberships.find(m => m.idMember === idMember);
-                            const name = m ? m.name : "Desconhecida";
+                            const memberData = membershipsMap.get(idMember)?.[0] ?? fallbackContractsMap.get(idMember)?.[0];
+                            const name = memberData?.name ?? "Desconhecida";
                             // Adiciona como ausente (status=1) e garante que seja processada pro cálculo da turma 
                             statusMatriculadas.set(idMember, { name, replacement: false, status: 1 });
                         }
@@ -278,7 +307,7 @@ export async function GET(req: NextRequest) {
                         if (!idMember) continue; // Pular visitantes/experimentais sem ID de membro
                         const isEvoReplacement = evoData.replacement;
                         const isPresent = evoData.status === 0;
-                        let memberContracts = memberships.filter((m) => m.idMember === idMember);
+                        let memberContracts = [...(membershipsMap.get(idMember) ?? [])];
 
                         let precisaBuscarIndividual = memberContracts.length === 0;
 
@@ -298,8 +327,9 @@ export async function GET(req: NextRequest) {
                         if (memberContracts.length === 0) {
                             if (isPresent) {
                                 // Verificar se a aluna tem contrato em algum outro mês (ex: aluna experimental)
-                                // Se tiver contrato FUTURO (início após o mês calculado), é aula experimental → pular
-                                const todosContratos = await getMemberMembershipsById(idMember);
+                                // Se tiver contrato FUTURO (início após o mês calculado), é aula experimental → pular.
+                                // Usa o fallbackContractsMap pré-carregado — sem query adicional ao banco.
+                                const todosContratos = fallbackContractsMap.get(idMember) ?? [];
                                 const fimDoMes = new Date(ano, mes, 0, 23, 59, 59); // último segundo do mês
                                 const temContratoFuturo = todosContratos.some(c => {
                                     const inicio = c.membershipStart ? new Date(c.membershipStart) : null;
