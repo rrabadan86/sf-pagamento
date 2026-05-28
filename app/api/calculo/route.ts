@@ -174,7 +174,12 @@ export async function GET(req: NextRequest) {
                 missingMemberIds.add(memberId);
             }
         }
-        const fallbackContractsMap = missingMemberIds.size > 0
+        for (const [memberId, contracts] of membershipsMap.entries()) {
+            if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
+                missingMemberIds.add(memberId);
+            }
+        }       
+	   const fallbackContractsMap = missingMemberIds.size > 0
             ? await getMemberMembershipsForIds(Array.from(missingMemberIds))
             : new Map<number, EvoMemberMembership[]>();
         console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos sem contrato vigente no mês.`);
