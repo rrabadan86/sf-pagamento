@@ -183,35 +183,48 @@ export async function getMemberMembershipsForIds(
         where: { idAluno: { in: memberIds.map(String) } },
         include: { aluno: true }
     });
+
     const result = new Map<number, EvoMemberMembership[]>();
     const foundInDb = new Set<number>();
     for (const c of contratos as any[]) {
         const id = parseInt(c.idAluno);
         if (!result.has(id)) result.set(id, []);
         result.get(id)!.push(mapPrismaToEvoMembership(c));
-        foundInDb.add(id);
+    }
+    // Marcar como "encontrado" SOMENTE se tiver pelo menos um contrato vigente (não expirado).
+    // Contratos expirados no banco não bloqueiam a busca na EVO API — o banco pode estar desatualizado.
+    const agora = new Date();
+    for (const [id, contracts] of result.entries()) {
+        const temVigente = contracts.some(c => {
+            const fim = c.membershipEnd ? new Date(c.membershipEnd) : null;
+            return !fim || fim >= agora;
+        });
+        if (temVigente) foundInDb.add(id);
     }
 
-    // 2. EVO API individual para membros não encontrados no banco
+    // 2. EVO API individual para membros sem contrato vigente no banco
+    // Sem filtro statusMemberMembership → inclui contratos RECORRENTE (status diferente de 1 na EVO)
     const notInDb = memberIds.filter(id => !foundInDb.has(id));
     if (notInDb.length > 0) {
-        console.log(`[getMemberMembershipsForIds] ${notInDb.length} membros ausentes no banco → buscando na EVO API individualmente`);
+        console.log(`[getMemberMembershipsForIds] ${notInDb.length} membros sem contrato vigente no banco → buscando na EVO API individualmente`);
         for (const idMember of notInDb) {
             try {
                 const contracts = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
                     idMember,
-                    statusMemberMembership: 1,
                     take: 50,
+                    // Sem statusMemberMembership — captura contratos RECORRENTE e todos os tipos ativos
                 });
-                if (contracts.length > 0) {
-                    result.set(idMember, contracts);
-                    console.log(`[getMemberMembershipsForIds] idMember=${idMember} → ${contracts[0].nameMembership}`);
+                const ativos = contracts.filter(c => !c.cancelDate);
+                if (ativos.length > 0) {
+                    result.set(idMember, ativos);
+                    console.log(`[getMemberMembershipsForIds] idMember=${idMember} → ${ativos[0].nameMembership}`);
                 }
             } catch (err) {
                 console.warn(`[getMemberMembershipsForIds] Erro ao buscar membro ${idMember}:`, err);
             }
         }
     }
+
 
     return result;
 }
