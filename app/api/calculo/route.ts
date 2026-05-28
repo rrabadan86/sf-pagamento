@@ -320,41 +320,55 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                        // RESGATE DE CONTRATOS VIP/FREE/MÚLTIPLOS OMITIDOS PELA EVO (Fallback)
-                        // Como nossos dados já vêm todos de `memberships` locais via Prisma, não precisamos
-                        // buscar 1 a 1 de novo. Fallback removido.
+                         // Enriquecer com contratos do fallback (DB/EVO individual) quando necessário:
+                        // cobre casos em que membershipsMap estava vazio ou só tinha contratos de "Circuito".
+                        if (precisaBuscarIndividual) {
+                            const fallbackContratos = fallbackContractsMap.get(idMember) ?? [];
+                            if (fallbackContratos.length > 0) {
+                                const existingKeys = new Set(memberContracts.map(c => {
+                                    const id = (c as any).idMemberMemberShip ?? c.idMemberMembership;
+                                    return id != null ? String(id) : `${c.idMember}_${c.membershipStart}`;
+                                }));
+                                for (const fc of fallbackContratos) {
+                                    const fcId = (fc as any).idMemberMemberShip ?? fc.idMemberMembership;
+                                    const fcKey = fcId != null ? String(fcId) : `${fc.idMember}_${fc.membershipStart}`;
+                                    if (!existingKeys.has(fcKey)) {
+                                        memberContracts.push(fc);
+                                        existingKeys.add(fcKey);
+                                    }
+                                }
+                            }
+                        }
 
                         if (memberContracts.length === 0) {
                             if (isPresent) {
-                                // Verificar se a aluna tem contrato em algum outro mês (ex: aluna experimental)
-                                // Se tiver contrato FUTURO (início após o mês calculado), é aula experimental → pular.
-                                // Usa o fallbackContractsMap pré-carregado — sem query adicional ao banco.
                                 const todosContratos = fallbackContractsMap.get(idMember) ?? [];
-                                const fimDoMes = new Date(ano, mes, 0, 23, 59, 59); // último segundo do mês
+                                const fimDoMes = new Date(ano, mes, 0, 23, 59, 59);
                                 const temContratoFuturo = todosContratos.some(c => {
                                     const inicio = c.membershipStart ? new Date(c.membershipStart) : null;
                                     return inicio && inicio > fimDoMes;
                                 });
                                 if (temContratoFuturo) {
-                                    // Aluna experimental — contrato apenas em mês futuro → não contabilizar
                                     continue;
                                 }
-                                // Fallback VIP/Avulsa Virtual - Aluna assistiu à aula, garantimos R$ 11
-                                memberContracts = [{
-                                    idMember: idMember,
-                                    name: evoData.name || "Aluna Avulsa/VIP",
-                                    nameMembership: "Plano Avulso/VIP",
-                                    membershipStatus: "Ativo",
-                                    saleValue: 0,
-                                    receivables: [],
-                                    membershipStart: "2000-01-01T00:00:00",
-                                    membershipEnd: "2099-01-01T00:00:00"
-                                } as unknown as EvoMemberMembership];
+                                if (todosContratos.length > 0) {
+                                    memberContracts = [...todosContratos];
+                                } else {
+                                    memberContracts = [{
+                                        idMember: idMember,
+                                        name: evoData.name || "Aluna Avulsa/VIP",
+                                        nameMembership: "Plano Avulso/VIP",
+                                        membershipStatus: "Ativo",
+                                        saleValue: 0,
+                                        receivables: [],
+                                        membershipStart: "2000-01-01T00:00:00",
+                                        membershipEnd: "2099-01-01T00:00:00"
+                                    } as unknown as EvoMemberMembership];
+                                }
                             } else {
                                 continue;
                             }
                         }
-
                         // Alunas VIP com R$ 0,00 por determinação da gestão (aparecem mas não geram remuneração)
                         const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
