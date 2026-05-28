@@ -434,18 +434,24 @@ export async function GET(req: NextRequest) {
                         let isFixoEmReposicao = false;
 
                         if (tipo === "fixo") {
-                            const ehOficialmenteDela = agendaAluna.some(ag => {
-                                if (ag.weekDay !== diaAulaNum) return false;
-                                if (!ag.startTime.startsWith(startTimeMask)) return false;
-                                const inicio = dayOnly(ag.startDate);
-                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
-                                return classDay >= inicio && classDay <= fim;
-                            });
+                            if (agendaAluna.length === 0) {
+                                // Sem grade no banco (aluna nova ou RECORRENTE não sincronizada pelo cron).
+                                // Usar apenas o flag da EVO como critério — ausência de dado ≠ reposição.
+                                if (isEvoReplacement === true) isFixoEmReposicao = true;
+                            } else {
+                                const ehOficialmenteDela = agendaAluna.some(ag => {
+                                    if (ag.weekDay !== diaAulaNum) return false;
+                                    if (!ag.startTime.startsWith(startTimeMask)) return false;
+                                    const inicio = dayOnly(ag.startDate);
+                                    const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                                    return classDay >= inicio && classDay <= fim;
+                                });
 
-                            if (!ehOficialmenteDela) {
-                                isFixoEmReposicao = true;
-                            } else if (isEvoReplacement === true) {
-                                isFixoEmReposicao = true;
+                                if (!ehOficialmenteDela) {
+                                    isFixoEmReposicao = true;
+                                } else if (isEvoReplacement === true) {
+                                    isFixoEmReposicao = true;
+                                }
                             }
                         }
 
