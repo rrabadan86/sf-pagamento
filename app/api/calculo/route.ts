@@ -169,20 +169,40 @@ export async function GET(req: NextRequest) {
         }
         // Membros cujos únicos contratos no bulk são de "Circuito" também precisam de busca individual:
         // podem ter contratos SlimFit que a query bulk (status=1) não retornou (ex: Polyanna, Grazi).
-        for (const [memberId, contracts] of membershipsMap.entries()) {
+  
+          for (const [memberId, contracts] of membershipsMap.entries()) {
             if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
                 missingMemberIds.add(memberId);
             }
         }
-        for (const [memberId, contracts] of membershipsMap.entries()) {
-            if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
-                missingMemberIds.add(memberId);
-            }
-        }       
-	   const fallbackContractsMap = missingMemberIds.size > 0
+        const fallbackContractsMap = missingMemberIds.size > 0
             ? await getMemberMembershipsForIds(Array.from(missingMemberIds))
             : new Map<number, EvoMemberMembership[]>();
         console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos sem contrato vigente no mês.`);
+
+        // Carregar grades fixas dos membros encontrados via fallback que não estavam em todosIdMatriculadas.
+        // Sem isso, alunas RECORRENTE são marcadas como isFixoEmReposicao=true e puladas no cálculo.
+        const idsFromFallback = Array.from(fallbackContractsMap.keys()).filter(id => !alunosComGradeNoBanco.has(id));
+        if (idsFromFallback.length > 0) {
+            const extraGrades = await prisma.gradeFixaAluno.findMany({
+                where: { idAluno: { in: idsFromFallback.map(String) } }
+            });
+            for (const g of extraGrades) {
+                const id = parseInt(g.idAluno);
+                if (!matriculasFixasGlobal.has(id)) matriculasFixasGlobal.set(id, []);
+                matriculasFixasGlobal.get(id)!.push({
+                    idActivity: g.idActivity,
+                    activityName: g.activityName,
+                    weekDay: g.weekDay,
+                    startTime: g.startTime,
+                    status: g.status,
+                    startDate: g.startDate.toISOString(),
+                    endDate: g.endDate ? g.endDate.toISOString() : null,
+                });
+            }
+            console.log(`[Cálculo] Grades extras carregadas para ${idsFromFallback.length} alunos do fallback (${extraGrades.length} entradas).`);
+        }
+  
 
         // PRÉ-CARREGAMENTO: percentuais de todos os professores em uma única query
         const profIds = Object.keys(porProfessor);
