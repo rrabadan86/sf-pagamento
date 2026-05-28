@@ -167,8 +167,12 @@ export async function GET(req: NextRequest) {
                 if (e.idMember && !membershipsMap.has(e.idMember)) missingMemberIds.add(e.idMember);
             }
         }
-        for (const id of matriculasFixasGlobal.keys()) {
-            if (!membershipsMap.has(id)) missingMemberIds.add(id);
+        // Membros cujos únicos contratos no bulk são de "Circuito" também precisam de busca individual:
+        // podem ter contratos SlimFit que a query bulk (status=1) não retornou (ex: Polyanna, Grazi).
+        for (const [memberId, contracts] of membershipsMap.entries()) {
+            if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
+                missingMemberIds.add(memberId);
+            }
         }
         const fallbackContractsMap = missingMemberIds.size > 0
             ? await getMemberMembershipsForIds(Array.from(missingMemberIds))
