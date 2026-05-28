@@ -117,27 +117,27 @@ export async function getMemberMemberships(
     mes: number,
     ano: number
 ): Promise<EvoMemberMembership[]> {
-    const dataInicioBusca = new Date(ano, mes - 1, 1);
-    const dataFimBusca = new Date(ano, mes, 0, 23, 59, 59);
+    const mesStr = String(mes).padStart(2, "0");
+    const dataInicio = `${ano}-${mesStr}-01`;
 
-    // Busca SEM filtro de status para pegar todos os contratos independentemente do status EVO.
-    // Planos "RECORRENTE" têm status diferente de 1 no EVO e eram ignorados antes. Filtramos
-    // por sobreposição de data no cliente para capturar apenas contratos vigentes no mês.
-    const todos = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
-        take: 50,
-    });
+    // Busca contratos ativos (status=1) + cancelados no mês (status=2)
+    // em paralelo para reduzir latência.
+    const [ativas, canceladas] = await Promise.all([
+        evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+            statusMemberMembership: 1,
+            take: 50,
+        }),
+        evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+            statusMemberMembership: 2,
+            cancelDateStart: dataInicio,
+            take: 50,
+        }),
+    ]);
 
-    // Filtrar por vigência: contrato deve sobrepor o mês solicitado
-    const vigentes = todos.filter(m => {
-        const start = m.membershipStart ? new Date(m.membershipStart) : new Date(0);
-        const end = m.membershipEnd ? new Date(m.membershipEnd) : new Date("2099-01-01");
-        return start <= dataFimBusca && end >= dataInicioBusca;
-    });
-
-    // Deduplicar por ID do contrato (EVO pode retornar "idMemberMemberShip" com S maiúsculo)
+    // Deduplicar por ID do contrato — campo real da EVO é "idMemberMemberShip" (S maiúsculo)
     const seenKeys = new Set<string>();
     const result: EvoMemberMembership[] = [];
-    for (const m of vigentes) {
+    for (const m of [...ativas, ...canceladas]) {
         const contractId = (m as any).idMemberMemberShip ?? m.idMemberMembership;
         const key = contractId != null ? String(contractId) : `${m.idMember}_${m.membershipStart}`;
         if (!seenKeys.has(key)) {
@@ -146,12 +146,7 @@ export async function getMemberMemberships(
         }
     }
 
-    console.log(`[getMemberMemberships] EVO: ${todos.length} total → ${result.length} vigentes em ${mes}/${ano}`);
-    if (result.length > 0) {
-        const s = result[0] as any;
-        console.log(`[getMemberMemberships] Amostra: idMember=${s.idMember}, name=${s.name}, nameMembership=${s.nameMembership}`);
-    }
-
+    console.log(`[getMemberMemberships] EVO bulk: ${ativas.length} status=1 + ${canceladas.length} canceladas = ${result.length} contratos`);
     return result;
 }
 
@@ -173,23 +168,51 @@ export async function getMemberMembershipsById(idMember: number): Promise<EvoMem
 }
 
 /**
- * Busca todos os contratos de uma lista de alunos em uma única query.
- * Retorna Map<idMember, contratos[]> — usado para eliminar N+1 no cálculo.
+ * Busca contratos de uma lista de membros.
+ * 1ª tentativa: banco local (rápido, sem EVO API).
+ * 2ª tentativa: EVO API individual por idMember para os que não estão no banco.
+ * Isso cobre planos RECORRENTE e outros que não são retornados pela query bulk status=1.
  */
 export async function getMemberMembershipsForIds(
     memberIds: number[]
 ): Promise<Map<number, EvoMemberMembership[]>> {
     if (memberIds.length === 0) return new Map();
+
+    // 1. Banco local
     const contratos = await prisma.contrato.findMany({
         where: { idAluno: { in: memberIds.map(String) } },
         include: { aluno: true }
     });
     const result = new Map<number, EvoMemberMembership[]>();
+    const foundInDb = new Set<number>();
     for (const c of contratos as any[]) {
         const id = parseInt(c.idAluno);
         if (!result.has(id)) result.set(id, []);
         result.get(id)!.push(mapPrismaToEvoMembership(c));
+        foundInDb.add(id);
     }
+
+    // 2. EVO API individual para membros não encontrados no banco
+    const notInDb = memberIds.filter(id => !foundInDb.has(id));
+    if (notInDb.length > 0) {
+        console.log(`[getMemberMembershipsForIds] ${notInDb.length} membros ausentes no banco → buscando na EVO API individualmente`);
+        for (const idMember of notInDb) {
+            try {
+                const contracts = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", {
+                    idMember,
+                    statusMemberMembership: 1,
+                    take: 50,
+                });
+                if (contracts.length > 0) {
+                    result.set(idMember, contracts);
+                    console.log(`[getMemberMembershipsForIds] idMember=${idMember} → ${contracts[0].nameMembership}`);
+                }
+            } catch (err) {
+                console.warn(`[getMemberMembershipsForIds] Erro ao buscar membro ${idMember}:`, err);
+            }
+        }
+    }
+
     return result;
 }
 
