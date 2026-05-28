@@ -11,6 +11,7 @@ interface AlunaCalculo {
     pagouNoMes: boolean;
     contribuicaoPorAula: number;
     dataFimContrato: string | null;
+    diasContratados?: string[];   // ← adicionar esta linha
 }
 
 interface ResultadoDiaDaSemana {
@@ -952,7 +953,7 @@ export default function CalculoPage() {
         setHorariosOcultos(new Set());
         try {
             const res = await fetch(`/api/calculo?mes=${mes}&ano=${ano}`);
-            
+
             // Verificar se a resposta é JSON antes de tentar parsear
             // (Vercel retorna HTML em caso de 504 timeout, causando erro de parse)
             const contentType = res.headers.get("content-type") || "";
@@ -963,7 +964,7 @@ export default function CalculoPage() {
                         : `Erro inesperado do servidor (HTTP ${res.status}). Tente novamente.`
                 );
             }
-            
+
             const data = await res.json();
             if (!res.ok) throw new Error(data.error ?? "Erro ao calcular");
             setResultado(data);
