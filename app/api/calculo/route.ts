@@ -114,16 +114,14 @@ export async function GET(req: NextRequest) {
             console.log(`[Cálculo] ${sessoesSemDados.length} sessão(ões) sem enrollment no banco (aguardando cron).`);
         }
 
-        // Mega Cache das Grades Fixas dos alunos (banco local)
+        // Carregar TODAS as grades do banco (sem filtro por membro).
+        // Isso garante que alunas RECORRENTE — que não aparecem no bulk EVO (status=1) —
+        // sejam injetadas nas aulas mesmo que não tenham nenhum enrollment no mês.
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
-        const idsMatriculados = Array.from(todosIdMatriculadas);
 
-        const gradesNoBanco = await prisma.gradeFixaAluno.findMany({
-            where: { idAluno: { in: idsMatriculados.map(String) } }
-        });
-
+        const todasGrades = await prisma.gradeFixaAluno.findMany();
         const alunosComGradeNoBanco = new Set<number>();
-        for (const g of gradesNoBanco) {
+        for (const g of todasGrades) {
             const id = parseInt(g.idAluno);
             if (!matriculasFixasGlobal.has(id)) matriculasFixasGlobal.set(id, []);
             matriculasFixasGlobal.get(id)!.push({
@@ -137,54 +135,32 @@ export async function GET(req: NextRequest) {
             });
             alunosComGradeNoBanco.add(id);
         }
+        console.log(`[Cálculo] ${todasGrades.length} entradas de grade carregadas para ${alunosComGradeNoBanco.size} alunos.`);
 
-        const idsParaFallback = idsMatriculados.filter(id => !alunosComGradeNoBanco.has(id));
-        if (idsParaFallback.length > 0) {
-            console.log(`[Cálculo] ${idsParaFallback.length} aluno(s) sem grade fixa no banco (aguardando cron).`);
-        }
-
-        // PRÉ-CARREGAMENTO: contratos de membros que aparecem nos enrollments mas não têm
-        // contrato vigente no mês (ex: alunas RECORRENTE, VIP, contrato expirado).
+        // PRÉ-CARREGAMENTO: contratos de membros que precisam de busca individual:
+        // 1. Aparecem nos enrollments mas não têm contrato no bulk
+        // 2. Têm apenas contratos "Circuito" no bulk (podem ter SlimFit RECORRENTE)
+        // 3. Têm grade no banco mas não estão no bulk (alunas RECORRENTE ausentes no mês)
         const missingMemberIds = new Set<number>();
         for (const enrollments of sessionEnrollmentsCache.values()) {
             for (const e of enrollments) {
                 if (e.idMember && !membershipsMap.has(e.idMember)) missingMemberIds.add(e.idMember);
             }
         }
-        // Membros com apenas contratos "Circuito" no bulk precisam de busca individual (podem ter SlimFit RECORRENTE)
         for (const [memberId, contracts] of membershipsMap.entries()) {
             if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
                 missingMemberIds.add(memberId);
             }
         }
+        // Alunas com grade mas sem contrato no bulk (RECORRENTE que não aparecem nos enrollments)
+        for (const idMember of alunosComGradeNoBanco) {
+            if (!membershipsMap.has(idMember)) missingMemberIds.add(idMember);
+        }
 
         const fallbackContractsMap = missingMemberIds.size > 0
             ? await getMemberMembershipsForIds(Array.from(missingMemberIds))
             : new Map<number, EvoMemberMembership[]>();
-        console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos sem contrato vigente no mês.`);
-
-        // Carregar grades fixas dos membros encontrados via fallback que não estavam em todosIdMatriculadas.
-        // Sem isso, alunas RECORRENTE são marcadas como isFixoEmReposicao=true e puladas no cálculo.
-        const idsFromFallback = Array.from(fallbackContractsMap.keys()).filter(id => !alunosComGradeNoBanco.has(id));
-        if (idsFromFallback.length > 0) {
-            const extraGrades = await prisma.gradeFixaAluno.findMany({
-                where: { idAluno: { in: idsFromFallback.map(String) } }
-            });
-            for (const g of extraGrades) {
-                const id = parseInt(g.idAluno);
-                if (!matriculasFixasGlobal.has(id)) matriculasFixasGlobal.set(id, []);
-                matriculasFixasGlobal.get(id)!.push({
-                    idActivity: g.idActivity,
-                    activityName: g.activityName,
-                    weekDay: g.weekDay,
-                    startTime: g.startTime,
-                    status: g.status,
-                    startDate: g.startDate.toISOString(),
-                    endDate: g.endDate ? g.endDate.toISOString() : null,
-                });
-            }
-            console.log(`[Cálculo] Grades extras carregadas para ${idsFromFallback.length} alunos do fallback (${extraGrades.length} entradas).`);
-        }
+        console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos via fallback.`);
 
         // PRÉ-CARREGAMENTO: percentuais de todos os professores em uma única query
         const profIds = Object.keys(porProfessor);
