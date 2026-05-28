@@ -19,6 +19,7 @@ export interface AlunaCalculo {
     pagouNoMes: boolean;
     contribuicaoPorAula: number; // calculado
     dataFimContrato: string | null;
+    diasContratados?: string[]; // dias fixos do contrato ex: ["Segunda 05h45", "Quarta 05h45"]
 }
 
 export interface ResultadoDiaDaSemana {

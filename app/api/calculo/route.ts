@@ -333,7 +333,7 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                        const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo"];
+                        const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo", "amanda ferreira de castro"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
                         const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
@@ -344,6 +344,15 @@ export async function GET(req: NextRequest) {
                             );
                             if (semCircuito.length > 0) memberContracts = semCircuito;
                         }
+
+                        // Remover contratos avulsos ("X Aulas", "Avulsa", "Pacote") quando há contrato recorrente/fixo disponível
+                        const semAvulsos = memberContracts.filter(
+                            (m) => {
+                                const n = (m.nameMembership || "").toLowerCase();
+                                return !n.includes("aulas") && !n.includes("avulsa") && !n.includes("pacote");
+                            }
+                        );
+                        if (semAvulsos.length > 0) memberContracts = semAvulsos;
 
                         memberContracts.sort((a, b) => {
                             const aName = (a.nameMembership || "").toLowerCase();
@@ -512,6 +521,23 @@ export async function GET(req: NextRequest) {
 
                         const finalStatus = statusContrato(m);
 
+                        // Montar lista de dias fixos do contrato para exibição na Gestão Central
+                        const diasContratados: string[] = [];
+                        if (tipo === "fixo" && agendaAluna.length > 0) {
+                            const primeiroDiaMes = new Date(ano, mes - 1, 1).getTime();
+                            const ultimoDiaMes = new Date(ano, mes, 0).getTime();
+                            const seen = new Set<string>();
+                            for (const ag of agendaAluna) {
+                                const inicio = dayOnly(ag.startDate);
+                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                                if (inicio > ultimoDiaMes || fim < primeiroDiaMes) continue;
+                                const dayName = DIAS_SEMANA[ag.weekDay];
+                                const time = ag.startTime.substring(0, 5).replace(':', 'h');
+                                const key = `${dayName} ${time}`;
+                                if (!seen.has(key)) { seen.add(key); diasContratados.push(key); }
+                            }
+                        }
+
                         alunasDoMes.push({
                             idMember: m.idMember,
                             nome: m.name,
@@ -522,6 +548,7 @@ export async function GET(req: NextRequest) {
                             pagouNoMes: temPagamentoNoMes(m, mes, ano),
                             contribuicaoPorAula: contrib,
                             dataFimContrato: m.membershipEnd || null,
+                            diasContratados: diasContratados.length > 0 ? diasContratados : undefined,
                         });
                     }
 

@@ -700,6 +700,9 @@ function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: Resul
 
                     if (a.tipo === "free") {
                         obj.diasMatriculados.add("FREE");
+                    } else if (a.diasContratados && a.diasContratados.length > 0) {
+                        // Usar dias fixos do contrato (gradeFixaAluno) quando disponível
+                        a.diasContratados.forEach(d => obj.diasMatriculados.add(d));
                     } else {
                         const dayMatch = d.diaDaSemana.match(/^(Segunda|Terça|Quarta|Quinta|Sexta|Sábado)/);
                         const dayPrefix = dayMatch ? dayMatch[1] : "Dia";
