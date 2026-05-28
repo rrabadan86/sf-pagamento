@@ -26,13 +26,12 @@ export async function GET(req: NextRequest) {
         // 1. Buscar grade de aulas do mês — preferencialmente do cache local (populado pelo cron)
         const cacheKey = `schedule_${mes}_${ano}`;
         const cachedSchedule = await prisma.cacheJSON.findUnique({ where: { chave: cacheKey } });
-        
+
         let schedule: EvoSchedule[];
         if (cachedSchedule) {
             schedule = JSON.parse(cachedSchedule.dados);
             console.log(`[Cálculo] Grade lida do cache (${schedule.length} sessões)`);
         } else {
-            // Cache não existe — cron precisa rodar primeiro para popular os dados
             console.log(`[Cálculo] Cache não encontrado para ${mes}/${ano}`);
             return NextResponse.json({
                 error: `Dados de ${mes}/${ano} ainda não foram sincronizados. Execute o sincronizador primeiro.`
@@ -59,7 +58,6 @@ export async function GET(req: NextRequest) {
         }> = {};
 
         for (const aula of schedule) {
-            // A API EVO não retorna instructorId na grade, então usamos o nome como identificador único perante a EVO
             const pid = aula.instructor || "Desconhecido";
             const turmaKey = `${aula.name} - ${aula.startTime} `;
             if (!porProfessor[pid]) {
@@ -75,14 +73,13 @@ export async function GET(req: NextRequest) {
         console.log("Nomes dos professores:", Object.values(porProfessor).map(p => p.nomeProfessor));
 
         // Calcular total global de aulas por turma (chave: nome - startTime) no mês
-        // Isso resolve o bug onde professores substitutos dividiam a mensalidade por 1 em vez do total da turma no mês.
         const globalTurmaAulas = new Map<string, number>();
         for (const aula of schedule) {
             const turmaKey = `${aula.name} - ${aula.startTime} `;
             globalTurmaAulas.set(turmaKey, (globalTurmaAulas.get(turmaKey) || 0) + 1);
         }
 
-        // Coletar todos os IDs de membros ativos no mês (para buscar grade fixa e faltas sem checkin)
+        // Coletar todos os IDs de membros ativos no mês
         const todosIdMatriculadas = new Set<number>();
         memberships.forEach(m => todosIdMatriculadas.add(m.idMember));
 
@@ -92,15 +89,10 @@ export async function GET(req: NextRequest) {
                 arr.slice(i * size, i * size + size)
             );
 
-        // Buscar matrículas de presença por sessão da API EVO diretamente
-        // A API /api/v1/entries retorna array vazio para esta academia; a única fonte confiável
-        // é /api/v1/activities/schedule/detail com o idAtividadeSessao de cada aula.
-        // Fazemos isso em batches de 10 sessões para evitar esgotar sockets.
+        // Ler enrollments do banco local (populado pelo cron noturno)
         const sessionEnrollmentsCache = new Map<number, EvoEnrollment[]>();
         const allSessionIds = schedule.map(a => a.idAtividadeSessao).filter((id): id is number => id != null);
-        
-        // OTIMIZAÇÃO: Ler enrollments do banco local (populado pelo cron noturno).
-        // Isso elimina ~100 chamadas à EVO API que causavam timeout 504 no Vercel.
+
         const enrollmentsDb = await prisma.enrollmentSessao.findMany({
             where: { idAtividadeSessao: { in: allSessionIds } }
         });
@@ -117,25 +109,19 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        // Sessões sem dados no banco são tratadas como vazio (cron precisa rodar primeiro)
         const sessoesSemDados = allSessionIds.filter(id => !sessionEnrollmentsCache.has(id));
         if (sessoesSemDados.length > 0) {
             console.log(`[Cálculo] ${sessoesSemDados.length} sessão(ões) sem enrollment no banco (aguardando cron).`);
         }
 
-        // Mega Cache das Grades Fixas dos alunos
-        // Lemos do banco local (populado pelo cron de madrugada) para evitar ~80 chamadas à EVO API.
-        // Fallback: se o aluno não tiver grade no banco (ex: aluno novo antes do cron rodar), busca da EVO.
+        // Mega Cache das Grades Fixas dos alunos (banco local)
         const matriculasFixasGlobal = new Map<number, EvoFixedSchedule[]>();
-
         const idsMatriculados = Array.from(todosIdMatriculadas);
 
-        // 1. Buscar do banco local (1 query para todos os alunos)
         const gradesNoBanco = await prisma.gradeFixaAluno.findMany({
             where: { idAluno: { in: idsMatriculados.map(String) } }
         });
 
-        // Mapear por idAluno
         const alunosComGradeNoBanco = new Set<number>();
         for (const g of gradesNoBanco) {
             const id = parseInt(g.idAluno);
@@ -152,29 +138,26 @@ export async function GET(req: NextRequest) {
             alunosComGradeNoBanco.add(id);
         }
 
-        // Alunos sem grade no banco são ignorados (cron precisa rodar primeiro para popular)
         const idsParaFallback = idsMatriculados.filter(id => !alunosComGradeNoBanco.has(id));
         if (idsParaFallback.length > 0) {
             console.log(`[Cálculo] ${idsParaFallback.length} aluno(s) sem grade fixa no banco (aguardando cron).`);
         }
 
         // PRÉ-CARREGAMENTO: contratos de membros que aparecem nos enrollments mas não têm
-        // contrato vigente no mês (ex: alunas experimentais, VIP, contrato expirado).
-        // Elimina N+1 de getMemberMembershipsById no loop interno.
+        // contrato vigente no mês (ex: alunas RECORRENTE, VIP, contrato expirado).
         const missingMemberIds = new Set<number>();
         for (const enrollments of sessionEnrollmentsCache.values()) {
             for (const e of enrollments) {
                 if (e.idMember && !membershipsMap.has(e.idMember)) missingMemberIds.add(e.idMember);
             }
         }
-        // Membros cujos únicos contratos no bulk são de "Circuito" também precisam de busca individual:
-        // podem ter contratos SlimFit que a query bulk (status=1) não retornou (ex: Polyanna, Grazi).
-  
-          for (const [memberId, contracts] of membershipsMap.entries()) {
+        // Membros com apenas contratos "Circuito" no bulk precisam de busca individual (podem ter SlimFit RECORRENTE)
+        for (const [memberId, contracts] of membershipsMap.entries()) {
             if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
                 missingMemberIds.add(memberId);
             }
         }
+
         const fallbackContractsMap = missingMemberIds.size > 0
             ? await getMemberMembershipsForIds(Array.from(missingMemberIds))
             : new Map<number, EvoMemberMembership[]>();
@@ -202,7 +185,6 @@ export async function GET(req: NextRequest) {
             }
             console.log(`[Cálculo] Grades extras carregadas para ${idsFromFallback.length} alunos do fallback (${extraGrades.length} entradas).`);
         }
-  
 
         // PRÉ-CARREGAMENTO: percentuais de todos os professores em uma única query
         const profIds = Object.keys(porProfessor);
@@ -210,12 +192,10 @@ export async function GET(req: NextRequest) {
             where: { idProfessorEvo: { in: profIds } },
             orderBy: { dataInicio: "desc" },
         });
-        // Mantém apenas o registro mais recente por professor
         const percMapDb = new Map<string, typeof percRecordsAll[0]>();
         for (const r of percRecordsAll) {
             if (!percMapDb.has(r.idProfessorEvo)) percMapDb.set(r.idProfessorEvo, r);
         }
-        // Cria registros para professores novos (ainda não cadastrados)
         for (const pid of profIds) {
             if (!percMapDb.has(pid)) {
                 const newRec = await prisma.professorPercentual.create({
@@ -234,19 +214,16 @@ export async function GET(req: NextRequest) {
         const resultado: ResultadoProfessor[] = [];
 
         for (const [pid, prof] of Object.entries(porProfessor)) {
-            // Pega definições de percentual/piso/teto do map pré-carregado
             const percRecord = percMapDb.get(pid);
             const percentual = percRecord?.percentual ?? 20;
 
-            // 5. Calcular cada turma
             const turmasCalculadas: ResultadoTurma[] = [];
 
             for (const [nomeTurma, aulas] of Object.entries(prof.turmas)) {
-                // Derivar dias da semana únicos para o cabeçalho descritivo "Segunda, Quarta..."
                 const diasSet = new Set<number>();
                 for (const a of aulas) {
                     const [y, mo, d] = a.activityDate.substring(0, 10).split('-').map(Number);
-                    const dObj = new Date(y, mo - 1, d); // local safe
+                    const dObj = new Date(y, mo - 1, d);
                     diasSet.add(dObj.getDay());
                 }
                 const diasArray = Array.from(diasSet).sort();
@@ -254,34 +231,25 @@ export async function GET(req: NextRequest) {
                 const totalAulasGeral = aulas.length;
 
                 const isCircuitoClass = nomeTurma.toLowerCase().includes("circuito");
-                const diasCalculados: ResultadoDiaDaSemana[] = []; // Irão representar as Sessões (Aulas individuais)
+                const diasCalculados: ResultadoDiaDaSemana[] = [];
 
                 if (totalAulasGeral === 0) continue;
 
-                // Ordenar aulas cronologicamente
                 const aulasOrdenadas = [...aulas].sort(
                     (a, b) => new Date(a.activityDate).getTime() - new Date(b.activityDate).getTime()
                 );
 
-                // Matching de Check-ins (Entries) do banco local para essa aula
-                // IMPORTANTE: usar parse seguro para evitar bug de timezone ("2026-02-04T00:00:00" pode
-                // ser interpretado como UTC e deslocar 1 dia p/ trás em BRT = Terça em vez de Quarta)
                 const parseLocalDate = (dateStr: string) => {
                     const [y, mo, d] = dateStr.substring(0, 10).split('-').map(Number);
-                    return new Date(y, mo - 1, d); // local midnight, sem deslocamento de timezone
+                    return new Date(y, mo - 1, d);
                 };
 
                 const aulasComMatriculas = aulasOrdenadas.map((aula) => {
-                    const dataAula = parseLocalDate(aula.activityDate);
-                    // Buscar enrollments da sessão diretamente do cache (pré-populado via API EVO)
                     const enrollments: EvoEnrollment[] = sessionEnrollmentsCache.get(aula.idAtividadeSessao) || [];
-
                     return { aula, enrollments };
                 });
 
-
                 for (const { aula, enrollments } of aulasComMatriculas) {
-                    // TIMEZONE FIX: usar parse local para evitar shift de 1 dia com strings sem timezone
                     const dataAula = parseLocalDate(aula.activityDate);
                     const nomeDiaStr = DIAS_SEMANA[dataAula.getDay()];
 
@@ -290,28 +258,24 @@ export async function GET(req: NextRequest) {
                     const diaDesc = `${nomeDiaStr} — ${pDia}/${pMes} às ${aula.startTime}`;
 
                     const statusMatriculadas = new Map<number, { name: string, replacement: boolean; status: number }>();
-                    // Pular enrollments sem idMember válido (ex: aulas experimentais de visitantes)
                     enrollments.forEach(e => {
                         if (!e.idMember) return;
                         statusMatriculadas.set(e.idMember, { name: e.name, replacement: e.replacement, status: e.status });
                     });
 
                     const diaAulaNum = dataAula.getDay();
-                    const startTimeMask = aula.startTime.substring(0, 5); // ex: "08:30"
+                    const startTimeMask = aula.startTime.substring(0, 5);
 
-                    // Helper: compara apenas a data (YYYY-MM-DD), ignorando hora/timezone.
                     const dayOnly = (dateStr: string) => {
                         const [y, mo, d] = dateStr.substring(0, 10).split('-').map(Number);
-                        return new Date(y, mo - 1, d).getTime(); // local midnight
+                        return new Date(y, mo - 1, d).getTime();
                     };
                     const classDay = new Date(dataAula.getFullYear(), dataAula.getMonth(), dataAula.getDate()).getTime();
 
-                    // INJETAR ALUNAS FIXAS QUE ESTÃO AUSENTES/NENHUMA ENROLLMENT (ex: Feriado / Zero ocupação)
-                    // Agora usamos a `matriculasFixasGlobal` resgatada da EVO api corretamente 
+                    // Injetar alunas fixas ausentes (feriado / zero enrollment)
                     for (const [idMember, grades] of Array.from(matriculasFixasGlobal.entries())) {
-                        if (statusMatriculadas.has(idMember)) continue; // Já está listada (presente/ausente/reposição)
+                        if (statusMatriculadas.has(idMember)) continue;
 
-                        // Verifica se este idMember tem grade fixa para a data/hora e que estivesse VIGENTE no dia classDay
                         const ehOficialmenteDela = grades.some(ag => {
                             if (ag.weekDay !== diaAulaNum) return false;
                             if (!ag.startTime.startsWith(startTimeMask)) return false;
@@ -323,25 +287,21 @@ export async function GET(req: NextRequest) {
                         if (ehOficialmenteDela) {
                             const memberData = membershipsMap.get(idMember)?.[0] ?? fallbackContractsMap.get(idMember)?.[0];
                             const name = memberData?.name ?? "Desconhecida";
-                            // Adiciona como ausente (status=1) e garante que seja processada pro cálculo da turma 
                             statusMatriculadas.set(idMember, { name, replacement: false, status: 1 });
                         }
                     }
 
                     const alunasDoMes: AlunaCalculo[] = [];
-                    // Validar usando a data exata da aula em questão:
                     const calcDate = new Date(ano, mes - 1, dataAula.getDate());
 
                     for (const [idMember, evoData] of Array.from(statusMatriculadas.entries())) {
-                        if (!idMember) continue; // Pular visitantes/experimentais sem ID de membro
+                        if (!idMember) continue;
                         const isEvoReplacement = evoData.replacement;
                         const isPresent = evoData.status === 0;
                         let memberContracts = [...(membershipsMap.get(idMember) ?? [])];
 
                         let precisaBuscarIndividual = memberContracts.length === 0;
 
-                        // Se a aluna está numa turma SlimFit, mas a EVO só retornou contratos de "Circuito",
-                        // é altamente provável que a EVO tenha omitido o contrato Fixo (ex: Polyanna, Grazi).
                         if (!precisaBuscarIndividual && !isCircuitoClass) {
                             const soTemCircuito = memberContracts.every(m => (m.nameMembership || "").toLowerCase().includes("circuito"));
                             if (soTemCircuito) {
@@ -349,8 +309,6 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                         // Enriquecer com contratos do fallback (DB/EVO individual) quando necessário:
-                        // cobre casos em que membershipsMap estava vazio ou só tinha contratos de "Circuito".
                         if (precisaBuscarIndividual) {
                             const fallbackContratos = fallbackContractsMap.get(idMember) ?? [];
                             if (fallbackContratos.length > 0) {
@@ -398,13 +356,12 @@ export async function GET(req: NextRequest) {
                                 continue;
                             }
                         }
-                        // Alunas VIP com R$ 0,00 por determinação da gestão (aparecem mas não geram remuneração)
+
                         const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
                         const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
-                        // Remover contratos "Circuito" em turmas de SlimFit (ex: Polyanna)
-                        // Note: Combos da Síntia ou Bruna usam "CIRC SLIM", então não são pegos por "circuito".
+                        // Remover contratos "Circuito" em turmas SlimFit
                         if (!isCircuitoClass) {
                             const semCircuito = memberContracts.filter(
                                 (m) => !(m.nameMembership || "").toLowerCase().includes("circuito")
@@ -412,7 +369,6 @@ export async function GET(req: NextRequest) {
                             if (semCircuito.length > 0) memberContracts = semCircuito;
                         }
 
-                        // Ordenar para escolher o contrato mais relevante
                         memberContracts.sort((a, b) => {
                             const aName = (a.nameMembership || "").toLowerCase();
                             const bName = (b.nameMembership || "").toLowerCase();
@@ -432,7 +388,6 @@ export async function GET(req: NextRequest) {
                             if (statusContrato(a) === "Ativo") aScore += 2;
                             if (statusContrato(b) === "Ativo") bScore += 2;
 
-                            // Vigência no mês de cálculo
                             const aStart = a.membershipStart ? new Date(a.membershipStart) : new Date(0);
                             const aEnd = a.membershipEnd ? new Date(a.membershipEnd) : new Date(0);
                             const bStart = b.membershipStart ? new Date(b.membershipStart) : new Date(0);
@@ -445,12 +400,9 @@ export async function GET(req: NextRequest) {
                             bScore += isVigenteB * 20;
 
                             if (aScore === bScore) {
-                                // Priorizar contrato com valor > 0 (evita selecionar placeholders com R$ 0)
                                 const aHasValue = a.saleValue > 0 ? 1 : 0;
                                 const bHasValue = b.saleValue > 0 ? 1 : 0;
                                 if (aHasValue !== bHasValue) return bHasValue - aHasValue;
-
-                                // Tiebreaker pela maior validade
                                 return bEnd.getTime() - aEnd.getTime();
                             }
 
@@ -459,11 +411,9 @@ export async function GET(req: NextRequest) {
 
                         const m = memberContracts[0];
 
-                        // Valor mensal
                         let valorMes = m.saleValue;
                         const nameLower = (m.nameMembership || "").toLowerCase();
 
-                        // Prioridade 1: Extrair a duração explicitamente do nome do contrato
                         let explicitMonths = 0;
                         if (nameLower.includes("anual")) explicitMonths = 12;
                         else if (nameLower.includes("semestral")) explicitMonths = 6;
@@ -474,16 +424,14 @@ export async function GET(req: NextRequest) {
                         if (explicitMonths > 0) {
                             valorMes = m.saleValue / explicitMonths;
                         } else {
-                            // Regra a partir do 2º semestre de 2025: Se não houver nome explícito, o padrão é dividir por 12
                             if (m.membershipStart) {
                                 const startDate = new Date(m.membershipStart);
                                 const startYear = startDate.getFullYear();
-                                const startMonth = startDate.getMonth(); // 0-11 (6 = Julho)
+                                const startMonth = startDate.getMonth();
 
                                 if (startYear >= 2026 || (startYear === 2025 && startMonth >= 6)) {
                                     valorMes = m.saleValue / 12;
                                 } else if (m.membershipEnd) {
-                                    // Fallback antigo: matemática de datas para contratos pré-2026 sem nome
                                     const start = new Date(m.membershipStart);
                                     const end = new Date(m.membershipEnd);
                                     let months =
@@ -493,7 +441,6 @@ export async function GET(req: NextRequest) {
                                     if (months > 1 && months <= 24) valorMes = m.saleValue / months;
                                 }
                             } else {
-                                // Fallback: usar totalInstallments se não houver datas de vigência
                                 const r = m.receivables?.find((rec) => !rec.canceled && rec.totalInstallments > 0);
                                 if (r && r.totalInstallments > 1 && r.totalInstallments <= 12) {
                                     valorMes = m.saleValue / r.totalInstallments;
@@ -503,15 +450,13 @@ export async function GET(req: NextRequest) {
 
                         const tipo = tipoDePlano(m.nameMembership);
 
-                        // O valor da mensalidade deve ser calculado em cima de 97% do valor nos contratos fixos
                         if (tipo === "fixo") {
                             valorMes = round2(valorMes * 0.97);
                         }
 
-                        // Reposição e Avaliação de Pertencimento:
                         const agendaAluna = matriculasFixasGlobal.get(m.idMember) || [];
                         let isFixoEmReposicao = false;
-                        
+
                         if (tipo === "fixo") {
                             const ehOficialmenteDela = agendaAluna.some(ag => {
                                 if (ag.weekDay !== diaAulaNum) return false;
@@ -528,26 +473,12 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                        // Alunas Free rendem R$ 11. Fixas em Reposição rendem R$ 0.
                         let contrib = 0;
                         if (tipo === "fixo") {
-                            // Encontrar 'dias de treino no mês' (divisor da mensalidade).
-                            // A preferência é o que está no nome do contrato ex: '3X/semana' -> frequencia * (dias no mes / 7).
-                            // Se o plano não tiver Nx/semana, o fallback é a totalidade global de aulas daquela turma na grade geral.
                             let diasDeTreinoNoMes = globalTurmaAulas.get(nomeTurma) || totalAulasGeral;
                             const diasNoMes = new Date(ano, mes, 0).getDate();
                             const nameStr = (m.nameMembership || "").toUpperCase();
 
-                            // Buscar primeiro explicitamente associado ao SLIMFIT ou CIRC (Aulas)
-                            // Exemplo 1: "2X SLIMFIT" / "3X CIRC"
-                            // Exemplo 2: "SLIMFIT 3X" / "CIRC 2X"
-                            // Se não achar nada perto do nome da aula, pegar o genérico (se hover só 1 no texto)
-                            // Extrair frequência semanal do nome do plano.
-                            // Para planos combo como "3X fixa + 2X SLIMFIT" somamos TODAS as frequências.
-                            // Exemplos:
-                            //   "SLIMFIT 3X FIXA" → 3
-                            //   "FLEX 3X fixa + 2X SLIMFIT/CIRC SLIM" → 3+2 = 5
-                            //   "BF Trim. - FLEX 2X fixa + 2X SLIMFIT/CIRC SLIM" → 2+2 = 4
                             let freq = 0;
                             const allFreqMatches = nameStr.match(/(\d+)\s*X/g);
                             if (allFreqMatches && allFreqMatches.length > 0) {
@@ -560,20 +491,15 @@ export async function GET(req: NextRequest) {
 
                             contrib = isFixoEmReposicao ? 0 : contribuicaoFixa(valorMes, percentual, diasDeTreinoNoMes);
                         } else {
-                            // Alunas com plano Free só geram a remuneração de R$ 11,00 se estiverem PRESENTES (status === 0 na EVO)
                             if (isVipZero) {
-                                // VIP especial: aparece sempre com R$ 0,00
                                 contrib = 0;
                             } else if (isPresent) {
                                 contrib = CONTRIBUICAO_FREE;
                             } else {
-                                // FREE ausente: não aparece na listagem (R$ 0 não faz sentido exibir)
                                 continue;
                             }
                         }
 
-                        // CORREÇÃO: Aluna FIXO em reposição pode ter plano FREE vigente
-                        // Se sim, usar o FREE em vez de ocultar (ex: Bruna com SlimFit Anual + FREE 3X)
                         if (isFixoEmReposicao) {
                             if (isPresent) {
                                 const freeContracts = memberContracts.filter(mc => {
@@ -586,7 +512,7 @@ export async function GET(req: NextRequest) {
                                     const freeM = freeContracts[0];
                                     const freeNomeLower = (freeM.name || evoData.name || '').toLowerCase();
                                     const isFreeVip = ALUNAS_VIP_ZERO.some(exc => freeNomeLower.includes(exc));
-                                       alunasDoMes.push({
+                                    alunasDoMes.push({
                                         idMember,
                                         nome: freeM.name || evoData.name || 'Aluna',
                                         tipo: 'free' as const,
@@ -599,7 +525,7 @@ export async function GET(req: NextRequest) {
                                     });
                                 }
                             }
-                            continue; // Sem contrato FREE ou ausente → ocultar reposição
+                            continue;
                         }
 
                         const finalStatus = statusContrato(m);
@@ -617,30 +543,22 @@ export async function GET(req: NextRequest) {
                         });
                     }
 
-                    // Ordenar alfabeticamente
                     alunasDoMes.sort((a, b) => a.nome.localeCompare(b.nome));
 
-                    // Limitar a 9 alunas por turma e calcular dia (sessão)
                     const alunasDiaList = alunasDoMes.slice(0, 9);
                     const isSabado = dataAula.getDay() === 6;
 
-                    // Usar || 55 em vez de ?? 55 para cobrir caso edge de piso=0 armazenado no banco
                     const pisoAtivo: number = ((percRecord as any)?.piso) || 55;
                     const tetoAtivo: number = ((percRecord as any)?.teto) || 90;
 
-                    // Calcular o dia — piso/teto passados aqui, mas também reaplicados abaixo para garantia
                     const diaCalc = calcularDiaDaSemana({
                         diaDaSemana: diaDesc,
-                        totalAulasNoDia: 1, // Exatamente 1 aula nesta sessão
+                        totalAulasNoDia: 1,
                         alunasCalculadas: alunasDiaList,
                         piso: pisoAtivo,
                         teto: tetoAtivo,
                     });
 
-                    // REGRA DO SÁBADO (DIÁRIA GLOBAL)
-                    // Se for Sábado, a professora tem garantidos R$ 70,00 naquele dia.
-                    // Para que não some 70,00 várias vezes ao dia, o 70 ficará alocado na primeira sessão de Sábado da turma (se houver cruzamento com as turmas passadas).
-                    // Para simplificar a exibição: fixamos R$ 0,00 na contribuição por aula do sábado (já que é diária) e criamos uma "Turma Fake" ou anexamos o Teto de 70.
                     if (isSabado) {
                         diaCalc.valorFinalPorAula = 70.0;
                         diaCalc.totalDiaNoMes = 70.0;
@@ -649,7 +567,6 @@ export async function GET(req: NextRequest) {
                         diaCalc.diaDaSemana += " (Diária Fixa Sábado)";
                     } else {
                         diaCalc.totalBrutoPorAula = round2(diaCalc.totalBrutoPorAula);
-                        // Aplicar piso/teto APÓS round2 para garantir que seja a última palavra
                         if (diaCalc.valorFinalPorAula < pisoAtivo) {
                             diaCalc.valorFinalPorAula = pisoAtivo;
                             diaCalc.pisoAplicado = true;
@@ -670,11 +587,6 @@ export async function GET(req: NextRequest) {
                     diasCalculados.push(diaCalc);
                 }
 
-                // Resolver duplicadas do Sábado em várias turmas:
-                // Se o professor lecionou mais de 1 turma de Sábado no Mês inteiro, 
-                // ele só recebe um "70,00" por DATA de Sábado.
-                // Como não sabemos previamente quais turmas ele tem aos sábados (podem ser diferentes) 
-                // Essa travessia acontece após processar todas as turmas, ou localmente.
                 const totalTurmaNoMes = round2(
                     diasCalculados.reduce((sum, d) => sum + d.totalDiaNoMes, 0)
                 );
@@ -684,25 +596,22 @@ export async function GET(req: NextRequest) {
                     diasDaSemana: nomesDias,
                     totalAulas: totalAulasGeral,
                     dias: diasCalculados,
-                    totalTurmaNoMes, // Este total momentâneo inclui multiplas de sabado. Consertaremos adiante globalmente.
+                    totalTurmaNoMes,
                 });
             }
 
-            // APLICAR AS DIÁRIAS COMPARTILHADAS DE SÁBADO
-            // O Professor ganha R$ 70 por cada sábado que pisar no estúdio, independente do # de turmas de sábado.
+            // Aplicar diárias compartilhadas de sábado
             const sabadosTrabalhados = new Set<string>();
             let deducoesPorDiariaExtraDeSabado = 0;
 
             for (const t of turmasCalculadas) {
                 for (const d of t.dias) {
                     if (d.diaDaSemana.includes("Sábado")) {
-                        // Extrai a data no formato DD/MM
                         const match = d.diaDaSemana.match(/(\d{2}\/\d{2})/);
                         if (match) {
                             const dataKey = match[1];
                             if (sabadosTrabalhados.has(dataKey)) {
-                                // Se o sábado já rendeu R$ 70,00 nessa ou noutra turma para o mesmo professor, zera essa.
-                                deducoesPorDiariaExtraDeSabado += d.totalDiaNoMes; // desconta os 70 aplicados indevidamente
+                                deducoesPorDiariaExtraDeSabado += d.totalDiaNoMes;
                                 d.valorFinalPorAula = 0;
                                 d.totalDiaNoMes = 0;
                                 d.diaDaSemana = `${d.diaDaSemana.replace(' (Diária Fixa Sábado)', '')} (Diária contada em outra turma)`;
@@ -712,16 +621,12 @@ export async function GET(req: NextRequest) {
                         }
                     }
                 }
-                // Refaz a soma da turma após os zeramentos dos sábados duplicados
                 t.totalTurmaNoMes = round2(
                     t.dias.reduce((sum, dia) => sum + dia.totalDiaNoMes, 0)
                 );
             }
 
-
-            // MERGE DE TURMAS DE SÁBADO
-            // O professor recebe R$ 70 por sábado trabalhado (já garantido acima).
-            // Aqui juntamos todas as turmas que são exclusivamente de Sábado em uma única entrada visual.
+            // Merge de turmas de sábado
             const turmasSabado = turmasCalculadas.filter(t =>
                 t.dias.length > 0 && t.dias.every(d => d.diaDaSemana.includes("Sábado"))
             );
@@ -730,7 +635,6 @@ export async function GET(req: NextRequest) {
             );
 
             if (turmasSabado.length > 1) {
-                // Coletar dias de sábado únicos com valor (que não foram zerados como duplicata)
                 const diasSabadoPagos: ResultadoDiaDaSemana[] = [];
                 for (const t of turmasSabado) {
                     for (const d of t.dias) {
@@ -753,7 +657,6 @@ export async function GET(req: NextRequest) {
             }
 
             const totalGeralNoMes = round2(
-
                 turmasCalculadas.reduce((sum, t) => sum + t.totalTurmaNoMes, 0)
             );
 
@@ -766,7 +669,6 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        // Ordenar por nome do professor
         resultado.sort((a, b) => a.nomeProfessor.localeCompare(b.nomeProfessor));
 
         return NextResponse.json({ mes, ano, professores: resultado });
