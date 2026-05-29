@@ -162,6 +162,48 @@ export async function GET(req: NextRequest) {
             : new Map<number, EvoMemberMembership[]>();
         console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos via fallback.`);
 
+        // Inferir turmas contratadas para membros FIXO sem grade (planos RECORRENTE).
+        // O endpoint /member-enrollment da EVO não retorna grade para esses planos;
+        // usamos as N turmas mais frequentadas no mês como proxy das turmas fixas,
+        // onde N vem do nome do contrato ("2X" → 2, "3X" → 3).
+        const recorrenteFixedTurmas = new Map<number, Set<string>>();
+        {
+            const sessaoParaTurma = new Map<number, string>();
+            for (const aula of schedule) {
+                if (aula.idAtividadeSessao != null) {
+                    sessaoParaTurma.set(aula.idAtividadeSessao, `${aula.name} - ${aula.startTime} `);
+                }
+            }
+
+            const contagemPorMembro = new Map<number, Map<string, number>>();
+            for (const [sessaoId, enrollments] of sessionEnrollmentsCache.entries()) {
+                const turmaKey = sessaoParaTurma.get(sessaoId);
+                if (!turmaKey) continue;
+                for (const e of enrollments) {
+                    if (!e.idMember || alunosComGradeNoBanco.has(e.idMember) || e.replacement) continue;
+                    if (!contagemPorMembro.has(e.idMember)) contagemPorMembro.set(e.idMember, new Map());
+                    const tc = contagemPorMembro.get(e.idMember)!;
+                    tc.set(turmaKey, (tc.get(turmaKey) || 0) + 1);
+                }
+            }
+
+            for (const [idMember, turmaCounts] of contagemPorMembro.entries()) {
+                const contratos = [
+                    ...(membershipsMap.get(idMember) ?? []),
+                    ...(fallbackContractsMap.get(idMember) ?? []),
+                ];
+                const melhorFixo = contratos.find(c => tipoDePlano(c.nameMembership) === "fixo");
+                if (!melhorFixo) continue;
+
+                const matchFreq = (melhorFixo.nameMembership || "").match(/(\d+)\s*[xX]/i);
+                const nTurmas = matchFreq ? parseInt(matchFreq[1]) : 2;
+
+                const sorted = Array.from(turmaCounts.entries()).sort((a, b) => b[1] - a[1]);
+                recorrenteFixedTurmas.set(idMember, new Set(sorted.slice(0, nTurmas).map(([k]) => k)));
+            }
+            console.log(`[Cálculo] Turmas inferidas para ${recorrenteFixedTurmas.size} membros FIXO sem grade.`);
+        }
+
         // PRÉ-CARREGAMENTO: percentuais de todos os professores em uma única query
         const profIds = Object.keys(porProfessor);
         const percRecordsAll = await prisma.professorPercentual.findMany({
@@ -444,9 +486,15 @@ export async function GET(req: NextRequest) {
 
                         if (tipo === "fixo") {
                             if (agendaAluna.length === 0) {
-                                // Sem grade no banco (aluna nova ou RECORRENTE não sincronizada pelo cron).
-                                // Usar apenas o flag da EVO como critério — ausência de dado ≠ reposição.
-                                if (isEvoReplacement === true) isFixoEmReposicao = true;
+                                // RECORRENTE sem grade: inferir turmas fixas por frequência de presença.
+                                if (isEvoReplacement === true) {
+                                    isFixoEmReposicao = true;
+                                } else {
+                                    const fixedTurmas = recorrenteFixedTurmas.get(m.idMember);
+                                    if (fixedTurmas && fixedTurmas.size > 0 && !fixedTurmas.has(nomeTurma)) {
+                                        isFixoEmReposicao = true;
+                                    }
+                                }
                             } else {
                                 const ehOficialmenteDela = agendaAluna.some(ag => {
                                     if (ag.weekDay !== diaAulaNum) return false;
@@ -523,18 +571,37 @@ export async function GET(req: NextRequest) {
 
                         // Montar lista de dias fixos do contrato para exibição na Gestão Central
                         const diasContratados: string[] = [];
-                        if (tipo === "fixo" && agendaAluna.length > 0) {
-                            const primeiroDiaMes = new Date(ano, mes - 1, 1).getTime();
-                            const ultimoDiaMes = new Date(ano, mes, 0).getTime();
-                            const seen = new Set<string>();
-                            for (const ag of agendaAluna) {
-                                const inicio = dayOnly(ag.startDate);
-                                const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
-                                if (inicio > ultimoDiaMes || fim < primeiroDiaMes) continue;
-                                const dayName = DIAS_SEMANA[ag.weekDay];
-                                const time = ag.startTime.substring(0, 5).replace(':', 'h');
-                                const key = `${dayName} ${time}`;
-                                if (!seen.has(key)) { seen.add(key); diasContratados.push(key); }
+                        if (tipo === "fixo") {
+                            if (agendaAluna.length > 0) {
+                                // Grade disponível: usar dias do gradeFixaAluno
+                                const primeiroDiaMes = new Date(ano, mes - 1, 1).getTime();
+                                const ultimoDiaMes = new Date(ano, mes, 0).getTime();
+                                const seen = new Set<string>();
+                                for (const ag of agendaAluna) {
+                                    const inicio = dayOnly(ag.startDate);
+                                    const fim = ag.endDate ? dayOnly(ag.endDate) : Infinity;
+                                    if (inicio > ultimoDiaMes || fim < primeiroDiaMes) continue;
+                                    const dayName = DIAS_SEMANA[ag.weekDay];
+                                    const time = ag.startTime.substring(0, 5).replace(':', 'h');
+                                    const key = `${dayName} ${time}`;
+                                    if (!seen.has(key)) { seen.add(key); diasContratados.push(key); }
+                                }
+                            } else {
+                                // Sem grade: usar turmas inferidas por frequência de presença
+                                const fixedTurmas = recorrenteFixedTurmas.get(m.idMember);
+                                if (fixedTurmas && fixedTurmas.size > 0) {
+                                    const seen = new Set<string>();
+                                    for (const turmaKey of fixedTurmas) {
+                                        const aulaEx = schedule.find(a => `${a.name} - ${a.startTime} ` === turmaKey);
+                                        if (!aulaEx) continue;
+                                        const [yy, mm, dd] = aulaEx.activityDate.substring(0, 10).split('-').map(Number);
+                                        const weekDay = new Date(yy, mm - 1, dd).getDay();
+                                        const dayName = DIAS_SEMANA[weekDay];
+                                        const time = aulaEx.startTime.substring(0, 5).replace(':', 'h');
+                                        const key = `${dayName} ${time}`;
+                                        if (!seen.has(key)) { seen.add(key); diasContratados.push(key); }
+                                    }
+                                }
                             }
                         }
 
