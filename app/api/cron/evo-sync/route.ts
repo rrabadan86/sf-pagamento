@@ -146,7 +146,8 @@ export async function GET(request: NextRequest) {
         // mantendo o total dentro das 1.000/mês do plano EVO Black.
         const DIAS_COM_GRADE = [1, 5, 10, 15, 20, 25];
         const diaDoMes = parseInt(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[2]);
-        const deveRodarGrade = DIAS_COM_GRADE.includes(diaDoMes);
+const forceGrade = request.nextUrl.searchParams.get("forceGrade") === "true";
+const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
 
         let countGrades = 0;
         if (deveRodarGrade) {
