@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSchedule } from "@/lib/evo/queries";
 import { getTurmaEnrollments } from "@/lib/evo/enrollments";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 // Endpoint leve: sincroniza APENAS os enrollments (presenças) das sessões de um mês.
