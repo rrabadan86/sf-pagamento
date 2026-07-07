@@ -5,14 +5,14 @@ import { evoFetchPaginated } from "@/lib/evo/client";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
-// Endpoint leve: ressincroniza os CONTRATOS (memberships) ativos da EVO para a tabela local.
-// O cron completo (evo-sync) frequentemente estoura o timeout antes de terminar o Step 1,
-// deixando contratos desatualizados/faltando — o que faz a data de vencimento aparecer errada.
-//
-// Estratégia: busca o bulk v3/membermembership (status ativo), agrupa por aluna e SUBSTITUI
-// os contratos locais dela (delete + insert), eliminando registros antigos de seed com datas velhas.
+// Endpoint: ressincroniza os CONTRATOS (memberships) da EVO para a tabela local.
+// O bulk v3/membermembership NÃO retorna a maioria dos contratos (planos RECORRENTE
+// ficam de fora), então buscamos ALUNA POR ALUNA — o único jeito que traz a data de
+// vencimento correta. Para cada aluna, SUBSTITUI os contratos locais (delete + insert),
+// eliminando registros antigos de seed com datas velhas.
 //
 // GET /api/cron/refresh-memberships?secret=...
+// Paginação opcional (se estourar 300s): &skip=0&take=150 e depois &skip=150
 export async function GET(request: NextRequest) {
     const authHeader = request.headers.get("authorization");
     const secretParam = request.nextUrl.searchParams.get("secret");
@@ -22,41 +22,42 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const skip = parseInt(request.nextUrl.searchParams.get("skip") ?? "0");
+    const takeParam = request.nextUrl.searchParams.get("take");
+
     try {
-        // Busca contratos ativos (status=1). Estes carregam a data de fim vigente correta.
-        const contratos = await evoFetchPaginated<any>("/api/v3/membermembership", {
-            statusMemberMembership: 1,
-            take: 50,
-        });
+        const alunos = await prisma.aluno.findMany({ select: { idEvo: true }, orderBy: { idEvo: "asc" } });
+        const todosIds = alunos.map(a => a.idEvo);
+        const take = takeParam ? parseInt(takeParam) : todosIds.length;
+        const idsPagina = todosIds.slice(skip, skip + take);
 
-        // Agrupar por aluna
-        const porAluna = new Map<number, any[]>();
-        for (const c of contratos) {
-            const idMember = c.idMember;
-            if (!idMember) continue;
-            if (!porAluna.has(idMember)) porAluna.set(idMember, []);
-            porAluna.get(idMember)!.push(c);
-        }
-
+        let alunasProcessadas = 0;
         let alunasAtualizadas = 0;
         let contratosGravados = 0;
-        let alunasSemCadastro = 0;
 
-        for (const [idMember, lista] of porAluna.entries()) {
-            const idAluno = idMember.toString();
+        for (const idAluno of idsPagina) {
+            alunasProcessadas++;
+            const idMember = parseInt(idAluno);
+            if (isNaN(idMember)) continue;
 
-            // Garantir que a aluna existe (FK). Se não existir no cadastro local, pula.
-            const aluno = await prisma.aluno.findUnique({ where: { idEvo: idAluno } });
-            if (!aluno) { alunasSemCadastro++; continue; }
+            let contratos: any[] = [];
+            try {
+                contratos = await evoFetchPaginated<any>("/api/v3/membermembership", {
+                    idMember,
+                    take: 50,
+                });
+            } catch {
+                continue; // erro pontual numa aluna não interrompe o lote
+            }
 
-            // Montar os contratos válidos ANTES de apagar, para nunca deixar a aluna sem dados.
-            const paraInserir = lista
+            // Considerar contratos não-cancelados (vigentes + expirados). O cálculo escolhe o vigente.
+            const paraInserir = contratos
+                .filter(c => !c.cancelDate)
                 .map(c => {
                     const idContrato = (c.idMemberMemberShip ?? c.idMemberMembership);
                     if (!idContrato || !c.membershipStart) return null;
-                    const cancelado = !!c.cancelDate;
                     const fim = c.membershipEnd ? new Date(c.membershipEnd) : new Date("2099-12-31T23:59:59Z");
-                    const status = cancelado ? "canceled" : (fim < new Date() ? "expired" : "active");
+                    const status = fim < new Date() ? "expired" : "active";
                     return {
                         idEvo: idContrato.toString(),
                         idAluno,
@@ -71,7 +72,7 @@ export async function GET(request: NextRequest) {
 
             if (paraInserir.length === 0) continue;
 
-            // SUBSTITUIR: apaga contratos antigos (seed desatualizado) e insere os atuais da EVO.
+            // SUBSTITUIR: apaga os antigos (seed desatualizado) e insere os atuais da EVO.
             await prisma.contrato.deleteMany({ where: { idAluno } });
             for (const data of paraInserir) {
                 await prisma.contrato.create({ data });
@@ -80,13 +81,18 @@ export async function GET(request: NextRequest) {
             alunasAtualizadas++;
         }
 
+        const proximoSkip = skip + take;
+        const temMais = proximoSkip < todosIds.length;
+
         return NextResponse.json({
             success: true,
-            contratosRecebidosEvo: contratos.length,
-            alunasNoResultado: porAluna.size,
+            totalAlunas: todosIds.length,
+            alunasProcessadas,
             alunasAtualizadas,
             contratosGravados,
-            alunasSemCadastroLocal: alunasSemCadastro,
+            proximaPagina: temMais
+                ? `?secret=SECRET&skip=${proximoSkip}${takeParam ? `&take=${takeParam}` : ""}`
+                : null,
         });
     } catch (err: any) {
         console.error("[refresh-memberships] Erro:", err);
