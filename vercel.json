@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/evo-tick",
-      "schedule": "*/20 6-9 * * *"
+      "schedule": "*/20 6-9 1 * *"
     }
   ]
 }
