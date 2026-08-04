@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
     // mas em produção, a Secret é mandatória pela Vercel.
 
     try {
+        const t0 = Date.now();
         console.log("=== INICIANDO CRON DE SINCRONIZAÇÃO EVO (DIA ANTERIOR) ===");
 
         // Data de Ontem (O ideal é rodar de madrugada, puxando do início ao fim de ontem)
@@ -141,79 +142,99 @@ export async function GET(request: NextRequest) {
         }
 
 
-        // --- 3. SINCRONIZAR GRADES FIXAS DOS ALUNOS (apenas dias 1,5,10,15,20,25) ---
-        // A grade fixa muda raramente. Sincronizar 6x/mês economiza ~480 requisições,
-        // mantendo o total dentro das 1.000/mês do plano EVO Black.
-        const DIAS_COM_GRADE = [1, 5, 10, 15, 20, 25];
+        // --- 3. SINCRONIZAR GRADES FIXAS DOS ALUNOS (apenas dias 1 e 25) ---
+        // A grade fixa muda raramente. Sincronizar 2x/mês (fechamento no dia 25 e
+        // virada no dia 1) mantém o total de requisições dentro do plano EVO Black.
+        const DIAS_COM_GRADE = [1, 25];
         const diaDoMes = parseInt(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[2]);
 const forceGrade = request.nextUrl.searchParams.get("forceGrade") === "true";
 const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
 
         let countGrades = 0;
+        let gradeParcial = false;
         if (deveRodarGrade) {
             console.log(`[CRON] Dia ${diaDoMes} — sincronizando grades fixas...`);
             const alunosSalvos = await prisma.aluno.findMany({ select: { idEvo: true } });
             const idsParaGrade = alunosSalvos.map(a => parseInt(a.idEvo)).filter(id => !isNaN(id));
 
-            const chunkSize = 10;
-            const chunks: number[][] = [];
-            for (let i = 0; i < idsParaGrade.length; i += chunkSize) {
-                chunks.push(idsParaGrade.slice(i, i + chunkSize));
-            }
+            // Trava de tempo: reserva ~40s para a fase 4 (enrollments) e nunca deixa
+            // a função estourar os 300s do plano (evita o 504). Se não terminar, marca
+            // como parcial — a próxima execução agendada (dia 1 ou 25) completa.
+            const GRADE_DEADLINE_MS = 240_000;
 
-            for (const chunk of chunks) {
-                await Promise.all(chunk.map(async (idMember) => {
+            // 3a. Buscar grades de TODAS as alunas em paralelo (lotes), sem tocar no banco.
+            const EVO_CONCURRENCY = 12;
+            type UpsertArg = Parameters<typeof prisma.gradeFixaAluno.upsert>[0];
+            const opsPorAluno: UpsertArg[] = [];
+            for (let i = 0; i < idsParaGrade.length; i += EVO_CONCURRENCY) {
+                if (Date.now() - t0 > GRADE_DEADLINE_MS) { gradeParcial = true; break; }
+                const lote = idsParaGrade.slice(i, i + EVO_CONCURRENCY);
+                const resultados = await Promise.all(lote.map(async (idMember) => {
                     try {
-                        const grades = await getMemberFixedSchedules(idMember);
-                        // Ordenar para que registros ativos (status=1) sejam processados POR ÚLTIMO,
-                        // garantindo que sobrescrevam os removidos (status=2) no upsert
-                        // quando compartilham a mesma chave (idAluno, idActivity, weekDay, startTime)
-                        const gradesSorted = [...grades].sort((a, b) => {
-                            // status=2 primeiro, status=1 por último (vence no upsert)
-                            const statusDiff = (b.status ?? 1) - (a.status ?? 1);
-                            if (statusDiff !== 0) return statusDiff;
-                            // Tiebreaker: endDate ascendente (último = endDate mais recente vence o upsert)
-                            const aEnd = a.endDate ? new Date(a.endDate).getTime() : Infinity;
-                            const bEnd = b.endDate ? new Date(b.endDate).getTime() : Infinity;
-                            return aEnd - bEnd;
-                        });
-                        for (const g of gradesSorted) {
-                            if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
-                            await prisma.gradeFixaAluno.upsert({
-                                where: {
-                                    idAluno_idActivity_weekDay_startTime: {
-                                        idAluno: idMember.toString(),
-                                        idActivity: g.idActivity,
-                                        weekDay: g.weekDay,
-                                        startTime: g.startTime,
-                                    }
-                                },
-                                update: {
-                                    activityName: g.activityName || "",
-                                    status: g.status ?? 1,
-                                    startDate: new Date(g.startDate),
-                                    endDate: g.endDate ? new Date(g.endDate) : null,
-                                },
-                                create: {
-                                    idAluno: idMember.toString(),
-                                    idActivity: g.idActivity,
-                                    activityName: g.activityName || "",
-                                    weekDay: g.weekDay,
-                                    startTime: g.startTime,
-                                    status: g.status ?? 1,
-                                    startDate: new Date(g.startDate),
-                                    endDate: g.endDate ? new Date(g.endDate) : null,
-                                }
-                            });
-                            countGrades++;
-                        }
+                        return { idMember, grades: await getMemberFixedSchedules(idMember) };
                     } catch (err) {
                         console.warn(`[CRON] Erro ao buscar grade fixa do aluno ${idMember}:`, err);
+                        return { idMember, grades: [] };
                     }
                 }));
+                for (const { idMember, grades } of resultados) {
+                    // Ordenar para que registros ativos (status=1) sejam gravados POR ÚLTIMO,
+                    // garantindo que sobrescrevam os removidos (status=2) quando compartilham
+                    // a mesma chave (idAluno, idActivity, weekDay, startTime).
+                    const gradesSorted = [...grades].sort((a, b) => {
+                        const statusDiff = (b.status ?? 1) - (a.status ?? 1);
+                        if (statusDiff !== 0) return statusDiff;
+                        const aEnd = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+                        const bEnd = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+                        return aEnd - bEnd;
+                    });
+                    for (const g of gradesSorted) {
+                        if (!g.idActivity || g.weekDay == null || !g.startTime || !g.startDate) continue;
+                        opsPorAluno.push({
+                            where: {
+                                idAluno_idActivity_weekDay_startTime: {
+                                    idAluno: idMember.toString(),
+                                    idActivity: g.idActivity,
+                                    weekDay: g.weekDay,
+                                    startTime: g.startTime,
+                                }
+                            },
+                            update: {
+                                activityName: g.activityName || "",
+                                status: g.status ?? 1,
+                                startDate: new Date(g.startDate),
+                                endDate: g.endDate ? new Date(g.endDate) : null,
+                            },
+                            create: {
+                                idAluno: idMember.toString(),
+                                idActivity: g.idActivity,
+                                activityName: g.activityName || "",
+                                weekDay: g.weekDay,
+                                startTime: g.startTime,
+                                status: g.status ?? 1,
+                                startDate: new Date(g.startDate),
+                                endDate: g.endDate ? new Date(g.endDate) : null,
+                            }
+                        });
+                    }
+                }
+            }
+
+            // 3b. Gravar em LOTES por transação — reduz drasticamente as idas ao banco
+            // (antes: 1 round-trip por registro; agora: 1 por lote). A ordem dos upserts
+            // é preservada, então registros ativos ainda vencem os removidos.
+            const WRITE_BATCH = 50;
+            for (let i = 0; i < opsPorAluno.length; i += WRITE_BATCH) {
+                if (Date.now() - t0 > GRADE_DEADLINE_MS) { gradeParcial = true; break; }
+                const batch = opsPorAluno.slice(i, i + WRITE_BATCH);
+                await prisma.$transaction(batch.map(arg => prisma.gradeFixaAluno.upsert(arg)));
+                countGrades += batch.length;
+            }
+            if (gradeParcial) {
+                console.warn(`[CRON] Grade fixa PARCIAL (${countGrades} registros) — deadline atingido. Próxima execução (dia 1/25) completa.`);
             }
         } else {
-            console.log(`[CRON] Dia ${diaDoMes} — grade fixa não agendada para hoje (próxima: dias 1,5,10,15,20,25).`);
+            console.log(`[CRON] Dia ${diaDoMes} — grade fixa não agendada para hoje (próxima: dias 1 e 25).`);
         }
 
         // --- 4. SINCRONIZAR ENROLLMENTS DAS SESSÕES (mês atual + mês anterior) ---
@@ -309,6 +330,7 @@ const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
                 contratosAtualizados: countContratos,
                 checkinsDeOntemSalvos: countCheckins,
                 gradesFixasSalvas: countGrades,
+                gradesFixasParcial: gradeParcial,
                 enrollmentsSalvos: countEnrollments
             }
         });
