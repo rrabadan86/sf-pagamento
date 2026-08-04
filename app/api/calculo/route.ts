@@ -317,6 +317,22 @@ export async function GET(req: NextRequest) {
                         }
                     }
 
+                    // Injetar alunas FIXO RECORRENTE (sem grade no EVO) inferidas por
+                    // frequência de presença. Planos "RECORRENTE" não retornam grade no
+                    // endpoint member-enrollment, logo não têm gradeFixaAluno. Sem esta
+                    // injeção elas só apareciam nas sessões já ocorridas (que possuem
+                    // enrollment real) e sumiam nas semanas futuras da própria turma —
+                    // ex.: Marcia Valeria e Laisa Camargo deixavam de aparecer após o
+                    // último dia sincronizado. Como são matriculadas fixas da turma,
+                    // devem constar em TODAS as sessões dela no mês.
+                    for (const [idMember, turmasDoMembro] of Array.from(recorrenteFixedTurmas.entries())) {
+                        if (statusMatriculadas.has(idMember)) continue;
+                        if (!turmasDoMembro.has(nomeTurma)) continue;
+                        const memberData = membershipsMap.get(idMember)?.[0] ?? fallbackContractsMap.get(idMember)?.[0];
+                        const name = memberData?.name ?? "Desconhecida";
+                        statusMatriculadas.set(idMember, { name, replacement: false, status: 1 });
+                    }
+
                     const alunasDoMes: AlunaCalculo[] = [];
                     const calcDate = new Date(ano, mes - 1, dataAula.getDate());
 
@@ -420,8 +436,8 @@ export async function GET(req: NextRequest) {
                             if (tipoDePlano(a.nameMembership) === "fixo") aScore += 5;
                             if (tipoDePlano(b.nameMembership) === "fixo") bScore += 5;
 
-                            if (statusContrato(a) === "Ativo") aScore += 2;
-                            if (statusContrato(b) === "Ativo") bScore += 2;
+                            if (statusContrato(a, calcDate) === "Ativo") aScore += 2;
+                            if (statusContrato(b, calcDate) === "Ativo") bScore += 2;
 
                             const aStart = a.membershipStart ? new Date(a.membershipStart) : new Date(0);
                             const aEnd = a.membershipEnd ? new Date(a.membershipEnd) : new Date(0);
@@ -575,7 +591,7 @@ export async function GET(req: NextRequest) {
                             continue;
                         }
 
-                        const finalStatus = statusContrato(m);
+                        const finalStatus = statusContrato(m, calcDate);
 
                         // Montar lista de dias fixos do contrato para exibição na Gestão Central
                         const diasContratados: string[] = [];
