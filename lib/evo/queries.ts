@@ -287,10 +287,18 @@ export function tipoDePlano(nameMembership: string): "fixo" | "free" {
  * Determina status do contrato a partir dos campos mapeados.
  */
 export function statusContrato(
-    m: EvoMemberMembership
+    m: EvoMemberMembership,
+    referencia?: Date
 ): "Ativo" | "Suspenso" | "Cancelado" {
     if (m.cancelDate) return "Cancelado";
     if (m.registerCancelDate) return "Suspenso";
+    // Um contrato cujo término (membershipEnd) já passou em relação à data de
+    // referência está EXPIRADO — não deve ser exibido como "Ativo" (ex.: planos
+    // antigos de 2023 que continuavam aparecendo verdes na grade).
+    if (referencia && m.membershipEnd) {
+        const fim = new Date(m.membershipEnd);
+        if (!isNaN(fim.getTime()) && fim < referencia) return "Cancelado";
+    }
     return "Ativo";
 }
 
