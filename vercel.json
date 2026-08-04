@@ -1,6 +1,7 @@
 {
   "crons": [
-    { "path": "/api/cron/evo-sync?forceGrade=true", "schedule": "0 9 * * *" },
-    { "path": "/api/cron/refresh-schedule", "schedule": "15 9 * * *" }
+    { "path": "/api/cron/evo-sync", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/refresh-schedule", "schedule": "15 9 * * *" },
+    { "path": "/api/cron/refresh-enrollments", "schedule": "30 9 * * *" }
   ]
 }

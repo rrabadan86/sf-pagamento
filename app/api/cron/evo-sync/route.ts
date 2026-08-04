@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { evoFetchPaginated } from "@/lib/evo/client";
-import { getMemberFixedSchedules, getTurmaEnrollments } from "@/lib/evo/enrollments";
+import { getMemberFixedSchedules } from "@/lib/evo/enrollments";
 import { getSchedule } from "@/lib/evo/queries";
 
 // Vercel Cron Limits: Até 10s no Hobby, até 60s no Pro/Premium. Pro maxDuration: 300
@@ -43,10 +43,16 @@ export async function GET(request: NextRequest) {
         let countAlunos = 0;
         let countContratos = 0;
 
+        // Coletar upserts e gravar em LOTES por transação — antes cada aluno/contrato
+        // era um round-trip separado ao banco remoto (Turso), o que sozinho já
+        // consumia boa parte dos 300s. O aluno precisa existir ANTES do contrato
+        // (FK), então gravamos todos os alunos primeiro, depois todos os contratos.
+        const alunoOps: Parameters<typeof prisma.aluno.upsert>[0][] = [];
+        const contratoOps: Parameters<typeof prisma.contrato.upsert>[0][] = [];
         for (const m of members) {
             const firstName = m.firstName || m.registerName;
             if (!m.idMember || !firstName) continue;
-            
+
             let cellphone = null;
             let email = null;
             if (m.contacts && Array.isArray(m.contacts)) {
@@ -57,50 +63,40 @@ export async function GET(request: NextRequest) {
                 if (emailContact) email = emailContact.description;
             }
 
-            // Aluno
             const nomeCompleto = m.lastName ? `${firstName} ${m.lastName}` : firstName;
-            await prisma.aluno.upsert({
+            alunoOps.push({
                 where: { idEvo: m.idMember.toString() },
-                update: {
-                    nome: nomeCompleto.trim(),
-                    email: email,
-                    celular: cellphone
-                },
-                create: {
-                    idEvo: m.idMember.toString(),
-                    nome: nomeCompleto.trim(),
-                    email: email,
-                    celular: cellphone
-                }
+                update: { nome: nomeCompleto.trim(), email: email, celular: cellphone },
+                create: { idEvo: m.idMember.toString(), nome: nomeCompleto.trim(), email: email, celular: cellphone },
             });
             countAlunos++;
 
-            // Contratos do Aluno
             if (m.memberships && Array.isArray(m.memberships)) {
                 for (const mb of m.memberships) {
                     if (!mb.idMembership || !mb.name || !mb.startDate) continue;
-                    
-                    await prisma.contrato.upsert({
+                    const dados = {
+                        nomePlano: mb.name,
+                        status: mb.membershipStatus || 'active',
+                        dataInicio: new Date(mb.startDate),
+                        dataFim: mb.endDate ? new Date(mb.endDate) : new Date("2099-12-31T23:59:59Z"),
+                    };
+                    contratoOps.push({
                         where: { idEvo: mb.idMembership.toString() },
-                        update: {
-                            nomePlano: mb.name,
-                            status: mb.membershipStatus || 'active',
-                            dataInicio: new Date(mb.startDate),
-                            dataFim: mb.endDate ? new Date(mb.endDate) : new Date("2099-12-31T23:59:59Z")
-                        },
-                        create: {
-                            idEvo: mb.idMembership.toString(),
-                            idAluno: m.idMember.toString(),
-                            nomePlano: mb.name,
-                            status: mb.membershipStatus || 'active',
-                            dataInicio: new Date(mb.startDate),
-                            dataFim: mb.endDate ? new Date(mb.endDate) : new Date("2099-12-31T23:59:59Z")
-                        }
+                        update: dados,
+                        create: { idEvo: mb.idMembership.toString(), idAluno: m.idMember.toString(), ...dados },
                     });
                     countContratos++;
                 }
             }
         }
+
+        const flushEmLotes = async <T,>(ops: T[], run: (op: T) => any, tamanho = 50) => {
+            for (let i = 0; i < ops.length; i += tamanho) {
+                await prisma.$transaction(ops.slice(i, i + tamanho).map(run));
+            }
+        };
+        await flushEmLotes(alunoOps, (op) => prisma.aluno.upsert(op));
+        await flushEmLotes(contratoOps, (op) => prisma.contrato.upsert(op));
 
         // --- 2. SINCRONIZAR CHECK-INS DE ONTEM ---
         const checkinsEvo = await evoFetchPaginated<any>("/api/v1/entries", { 
@@ -108,38 +104,40 @@ export async function GET(request: NextRequest) {
             dtEnd: ontemStr
         });
         
+        // Pré-carregar os IDs de alunos em UMA query (antes era um findUnique por
+        // check-in — dobrava os round-trips ao banco). O check-in só é gravado se
+        // a aluna existe (restrição de FK).
+        const alunosExistentes = new Set(
+            (await prisma.aluno.findMany({ select: { idEvo: true } })).map(a => a.idEvo)
+        );
         let countCheckins = 0;
+        const checkinOps: Parameters<typeof prisma.checkin.upsert>[0][] = [];
         for (const entry of checkinsEvo) {
             if (!entry.idMember || !entry.date) continue;
+            if (!alunosExistentes.has(entry.idMember.toString())) continue;
 
-            const alunoExiste = await prisma.aluno.findUnique({ where: { idEvo: entry.idMember.toString() }});
-            
-            if (alunoExiste) {
-                // A EVO retorna datas como "2026-03-10T10:00:00" (BRT, sem sufixo Z)
-                // O JS interpreta como UTC → salva 3h antes. Corrigir com offset do timeZone.
-                const dataCheckinRaw = new Date(entry.date);
-                const offsetMs = entry.timeZone
-                    ? -(parseInt(entry.timeZone.split(':')[0]) * 60) * 60000
-                    : 3 * 60 * 60 * 1000; // fallback BRT = UTC-3
-                const dataCheckin = new Date(dataCheckinRaw.getTime() + offsetMs);
-                const idRecordCalc = `${entry.idMember}_${dataCheckin.getTime()}`;
+            // A EVO retorna datas como "2026-03-10T10:00:00" (BRT, sem sufixo Z)
+            // O JS interpreta como UTC → salva 3h antes. Corrigir com offset do timeZone.
+            const dataCheckinRaw = new Date(entry.date);
+            const offsetMs = entry.timeZone
+                ? -(parseInt(entry.timeZone.split(':')[0]) * 60) * 60000
+                : 3 * 60 * 60 * 1000; // fallback BRT = UTC-3
+            const dataCheckin = new Date(dataCheckinRaw.getTime() + offsetMs);
+            const idRecordCalc = `${entry.idMember}_${dataCheckin.getTime()}`;
 
-                await prisma.checkin.upsert({
-                    where: { idEvo: idRecordCalc },
-                    update: {
-                        dataHora: dataCheckin,
-                        status: entry.entryType || 'Presente'
-                    },
-                    create: {
-                        idEvo: idRecordCalc,
-                        idAluno: entry.idMember.toString(),
-                        dataHora: dataCheckin,
-                        status: entry.entryType || 'Presente'
-                    }
-                });
-                countCheckins++;
-            }
+            checkinOps.push({
+                where: { idEvo: idRecordCalc },
+                update: { dataHora: dataCheckin, status: entry.entryType || 'Presente' },
+                create: {
+                    idEvo: idRecordCalc,
+                    idAluno: entry.idMember.toString(),
+                    dataHora: dataCheckin,
+                    status: entry.entryType || 'Presente',
+                },
+            });
+            countCheckins++;
         }
+        await flushEmLotes(checkinOps, (op) => prisma.checkin.upsert(op));
 
 
         // --- 3. SINCRONIZAR GRADES FIXAS DOS ALUNOS (apenas dias 1 e 25) ---
@@ -241,7 +239,6 @@ const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
         // Busca a grade de aulas (sessões) e para cada sessão, busca os enrollments da EVO API.
         // Isso elimina a necessidade de ~100 chamadas à EVO durante o cálculo de remuneração,
         // que é o principal causador do timeout 504.
-        let countEnrollments = 0;
         const agora = new Date();
         const mesAtualBRT = parseInt(agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[1]);
         const anoAtualBRT = parseInt(agora.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).split('-')[0]);
@@ -270,53 +267,11 @@ const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
                     create: { chave: cacheKey, dados: JSON.stringify(schedule) },
                 });
                 console.log(`[CRON] Grade de ${mesSync}/${anoSync} cacheada (${schedule.length} sessões)`);
-                
-                const sessionIds = schedule
-                    .map(a => a.idAtividadeSessao)
-                    .filter((id): id is number => id != null);
-
-                console.log(`[CRON] ${sessionIds.length} sessões encontradas em ${mesSync}/${anoSync}`);
-
-                // Buscar enrollments em batches de 3 (respeitando rate limit da EVO)
-                const chunkArray = <T>(arr: T[], size: number) =>
-                    Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size));
-
-                const sessionChunks = chunkArray(sessionIds, 3);
-                for (const chunk of sessionChunks) {
-                    await Promise.all(chunk.map(async (sessId) => {
-                        try {
-                            const enrollments = await getTurmaEnrollments(sessId);
-                            for (const e of enrollments) {
-                                if (!e.idMember) continue;
-                                await prisma.enrollmentSessao.upsert({
-                                    where: {
-                                        idAtividadeSessao_idMember: {
-                                            idAtividadeSessao: sessId,
-                                            idMember: e.idMember,
-                                        }
-                                    },
-                                    update: {
-                                        nome: e.name || "",
-                                        replacement: e.replacement ?? false,
-                                        status: e.status ?? 0,
-                                    },
-                                    create: {
-                                        idAtividadeSessao: sessId,
-                                        idMember: e.idMember,
-                                        nome: e.name || "",
-                                        replacement: e.replacement ?? false,
-                                        status: e.status ?? 0,
-                                    }
-                                });
-                                countEnrollments++;
-                            }
-                        } catch (err) {
-                            console.warn(`[CRON] Erro ao buscar enrollments da sessão ${sessId}:`, err);
-                        }
-                    }));
-                }
+                // Os enrollments por sessão (parte mais pesada) NÃO são mais feitos aqui —
+                // ficam no cron dedicado /api/cron/refresh-enrollments, que tem seu próprio
+                // orçamento de 300s. Isso evita o timeout 504 do evo-sync.
             } catch (err) {
-                console.warn(`[CRON] Erro ao sincronizar enrollments de ${mesSync}/${anoSync}:`, err);
+                console.warn(`[CRON] Erro ao cachear grade de ${mesSync}/${anoSync}:`, err);
             }
         }
 
@@ -331,7 +286,7 @@ const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
                 checkinsDeOntemSalvos: countCheckins,
                 gradesFixasSalvas: countGrades,
                 gradesFixasParcial: gradeParcial,
-                enrollmentsSalvos: countEnrollments
+                enrollmentsSalvos: "delegado ao cron refresh-enrollments"
             }
         });
 

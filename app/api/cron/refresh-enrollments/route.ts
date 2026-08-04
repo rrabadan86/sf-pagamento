@@ -56,35 +56,38 @@ export async function GET(request: NextRequest) {
 
         let countEnrollments = 0;
         let sessoesProcessadas = 0;
+        let parouNoDeadline = false;
+        const t0 = Date.now();
+        const DEADLINE_MS = 250_000; // margem sob o limite de 300s → nunca dá 504
 
         const chunkArray = <T>(arr: T[], size: number) =>
             Array.from({ length: Math.ceil(arr.length / size) }, (_, i) => arr.slice(i * size, i * size + size));
 
-        for (const chunk of chunkArray(sessionIds, 3)) {
+        type EnrollOp = Parameters<typeof prisma.enrollmentSessao.upsert>[0];
+        const flushEmLotes = async (ops: EnrollOp[], tamanho = 50) => {
+            for (let i = 0; i < ops.length; i += tamanho) {
+                await prisma.$transaction(ops.slice(i, i + tamanho).map(op => prisma.enrollmentSessao.upsert(op)));
+            }
+        };
+
+        for (const chunk of chunkArray(sessionIds, 6)) {
+            if (Date.now() - t0 > DEADLINE_MS) { parouNoDeadline = true; break; }
+            const ops: EnrollOp[] = [];
             await Promise.all(chunk.map(async (sessId) => {
                 try {
                     const enrollments = await getTurmaEnrollments(sessId);
                     for (const e of enrollments) {
                         if (!e.idMember) continue;
-                        await prisma.enrollmentSessao.upsert({
-                            where: {
-                                idAtividadeSessao_idMember: {
-                                    idAtividadeSessao: sessId,
-                                    idMember: e.idMember,
-                                }
-                            },
-                            update: {
-                                nome: e.name || "",
-                                replacement: e.replacement ?? false,
-                                status: e.status ?? 0,
-                            },
+                        ops.push({
+                            where: { idAtividadeSessao_idMember: { idAtividadeSessao: sessId, idMember: e.idMember } },
+                            update: { nome: e.name || "", replacement: e.replacement ?? false, status: e.status ?? 0 },
                             create: {
                                 idAtividadeSessao: sessId,
                                 idMember: e.idMember,
                                 nome: e.name || "",
                                 replacement: e.replacement ?? false,
                                 status: e.status ?? 0,
-                            }
+                            },
                         });
                         countEnrollments++;
                     }
@@ -93,10 +96,12 @@ export async function GET(request: NextRequest) {
                     console.warn(`[refresh-enrollments] Erro na sessão ${sessId}:`, err);
                 }
             }));
+            // Gravar as presenças deste chunk em lotes por transação (menos round-trips).
+            await flushEmLotes(ops);
         }
 
-        const proximoSkip = skip + take;
-        const temMais = proximoSkip < allSessionIds.length;
+        const proximoSkip = skip + sessoesProcessadas;
+        const temMais = parouNoDeadline || proximoSkip < allSessionIds.length;
 
         return NextResponse.json({
             success: true,
