@@ -141,6 +141,18 @@ export async function GET(req: NextRequest) {
         // 1. Aparecem nos enrollments mas não têm contrato no bulk
         // 2. Têm apenas contratos "Circuito" no bulk (podem ter SlimFit RECORRENTE)
         // 3. Têm grade no banco mas não estão no bulk (alunas RECORRENTE ausentes no mês)
+        // Vigência no mês de referência: contrato ativo em qualquer dia do mês.
+        const primeiroDiaMesRef = new Date(ano, mes - 1, 1);
+        const ultimoDiaMesRef = new Date(ano, mes, 0, 23, 59, 59);
+        const contratoVigenteNoMes = (c: EvoMemberMembership) => {
+            const ini = c.membershipStart ? new Date(c.membershipStart) : null;
+            const fim = c.membershipEnd ? new Date(c.membershipEnd) : null;
+            if (!ini) return false;
+            if (ini > ultimoDiaMesRef) return false;
+            if (fim && fim < primeiroDiaMesRef) return false;
+            return true;
+        };
+
         const missingMemberIds = new Set<number>();
         for (const enrollments of sessionEnrollmentsCache.values()) {
             for (const e of enrollments) {
@@ -149,6 +161,14 @@ export async function GET(req: NextRequest) {
         }
         for (const [memberId, contracts] of membershipsMap.entries()) {
             if (contracts.length > 0 && contracts.every(c => (c.nameMembership || "").toLowerCase().includes("circuito"))) {
+                missingMemberIds.add(memberId);
+            }
+            // Membro cujo bulk EVO NÃO tem nenhum contrato vigente no mês: o bulk
+            // (statusMemberMembership=1 = "não cancelado", não "vigente") frequentemente
+            // traz só contratos ANTIGOS e omite o atual (RECORRENTE). O banco local tem o
+            // vigente — força a busca no fallback para que ele seja considerado.
+            // Ex.: Hiva e Andreia apareciam com plano de 2023 em vez do SlimFit atual.
+            if (contracts.length > 0 && !contracts.some(contratoVigenteNoMes)) {
                 missingMemberIds.add(memberId);
             }
         }
@@ -351,6 +371,14 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
+                        // Se o bulk não tem NENHUM contrato vigente no mês, mesclar os do
+                        // banco local (fallback) — que contém o contrato atual. Sem isso, o
+                        // cálculo escolhia um plano antigo (ex.: Semestral 2023) porque o bulk
+                        // só trazia contratos expirados.
+                        if (!precisaBuscarIndividual && !memberContracts.some(contratoVigenteNoMes)) {
+                            precisaBuscarIndividual = true;
+                        }
+
                         if (precisaBuscarIndividual) {
                             const fallbackContratos = fallbackContractsMap.get(idMember) ?? [];
                             if (fallbackContratos.length > 0) {
@@ -475,27 +503,35 @@ export async function GET(req: NextRequest) {
                         if (explicitMonths > 0) {
                             valorMes = m.saleValue / explicitMonths;
                         } else {
-                            if (m.membershipStart) {
-                                const startDate = new Date(m.membershipStart);
-                                const startYear = startDate.getFullYear();
-                                const startMonth = startDate.getMonth();
+                            // Sem palavra-chave de duração no nome: derivar o nº de meses do
+                            // próprio contrato, na ordem de confiabilidade:
+                            //   1) parcelamento real (receivables.totalInstallments);
+                            //   2) duração início→fim;
+                            //   3) contrato aberto (sem fim) 2026+ → anual (/12).
+                            // Antes, TODO contrato 2026+ era dividido por 12 — o que quebrava
+                            // planos curtos como "COPA SLIM 2026" (3 meses, R$1242 → deveria ser
+                            // R$414/mês, mas virava R$103/mês).
+                            const rec = m.receivables?.find((r) => !r.canceled && r.totalInstallments > 1);
+                            let durMonths = 0;
+                            if (m.membershipStart && m.membershipEnd) {
+                                const s = new Date(m.membershipStart);
+                                const e = new Date(m.membershipEnd);
+                                durMonths = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
+                                if (durMonths <= 0) durMonths = 1;
+                            }
 
-                                if (startYear >= 2026 || (startYear === 2025 && startMonth >= 6)) {
-                                    valorMes = m.saleValue / 12;
-                                } else if (m.membershipEnd) {
-                                    const start = new Date(m.membershipStart);
-                                    const end = new Date(m.membershipEnd);
-                                    let months =
-                                        (end.getFullYear() - start.getFullYear()) * 12 +
-                                        (end.getMonth() - start.getMonth());
-                                    if (months <= 0) months = 1;
-                                    if (months > 1 && months <= 24) valorMes = m.saleValue / months;
-                                }
-                            } else {
-                                const r = m.receivables?.find((rec) => !rec.canceled && rec.totalInstallments > 0);
-                                if (r && r.totalInstallments > 1 && r.totalInstallments <= 12) {
-                                    valorMes = m.saleValue / r.totalInstallments;
-                                }
+                            if (rec && rec.totalInstallments > 1 && rec.totalInstallments <= 24) {
+                                valorMes = m.saleValue / rec.totalInstallments;
+                            } else if (durMonths > 1 && durMonths <= 24) {
+                                valorMes = m.saleValue / durMonths;
+                            } else if (durMonths === 1) {
+                                // plano de ~1 mês: valor mensal = valor cheio
+                                valorMes = m.saleValue;
+                            } else if (m.membershipStart) {
+                                // sem data fim (contrato aberto): assume anual recorrente 2026+
+                                const sy = new Date(m.membershipStart).getFullYear();
+                                const sm = new Date(m.membershipStart).getMonth();
+                                if (sy >= 2026 || (sy === 2025 && sm >= 6)) valorMes = m.saleValue / 12;
                             }
                         }
 
