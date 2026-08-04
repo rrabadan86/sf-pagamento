@@ -155,10 +155,11 @@ const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
             const alunosSalvos = await prisma.aluno.findMany({ select: { idEvo: true } });
             const idsParaGrade = alunosSalvos.map(a => parseInt(a.idEvo)).filter(id => !isNaN(id));
 
-            // Trava de tempo: reserva ~40s para a fase 4 (enrollments) e nunca deixa
-            // a função estourar os 300s do plano (evita o 504). Se não terminar, marca
-            // como parcial — a próxima execução agendada (dia 1 ou 25) completa.
-            const GRADE_DEADLINE_MS = 240_000;
+            // Trava de tempo: usa quase todo o orçamento de 300s (a fase 4 seguinte é
+            // só cache de grade, redundante com o cron refresh-schedule, e é pulada se o
+            // tempo acabar). O EVO limita a ~4 req/s, então ~84 alunas levam ~240s: por
+            // isso a trava fica em 285s, deixando as grades caberem inteiras sem 504.
+            const GRADE_DEADLINE_MS = 285_000;
 
             // 3a. Buscar grades de TODAS as alunas em paralelo (lotes), sem tocar no banco.
             const EVO_CONCURRENCY = 12;
@@ -254,8 +255,15 @@ const deveRodarGrade = forceGrade || DIAS_COM_GRADE.includes(diaDoMes);
             mesesParaSync.push({ mes: mesAtualBRT - 1, ano: anoAtualBRT });
         }
 
+        // Guarda de tempo: se a fase de grades consumiu quase todo o orçamento, pula o
+        // cache aqui — ele é redundante com o cron refresh-schedule (roda diariamente).
+        const SYNC_DEADLINE_MS = 290_000;
         for (const { mes: mesSync, ano: anoSync } of mesesParaSync) {
-            console.log(`[CRON] Sincronizando enrollments de ${mesSync}/${anoSync}...`);
+            if (Date.now() - t0 > SYNC_DEADLINE_MS) {
+                console.warn(`[CRON] Cache de grade pulado (deadline) — coberto pelo cron refresh-schedule.`);
+                break;
+            }
+            console.log(`[CRON] Cacheando grade de ${mesSync}/${anoSync}...`);
             try {
                 const schedule = await getSchedule(mesSync, anoSync);
                 
