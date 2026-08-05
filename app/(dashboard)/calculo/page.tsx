@@ -53,6 +53,17 @@ function fmt(v: number) {
     return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function fmtDataHora(iso: string | null | undefined) {
+    if (!iso) return "nunca";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleString("pt-BR", {
+        timeZone: "America/Sao_Paulo",
+        day: "2-digit", month: "2-digit", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
+    });
+}
+
 function BadgeStatus({ status }: { status: "Ativo" | "Suspenso" | "Cancelado" }) {
     const cls = status === "Ativo" ? "badge-green" : status === "Suspenso" ? "badge-yellow" : "badge-red";
     return <span className={`badge ${cls}`}>{status}</span>;
@@ -766,7 +777,10 @@ export default function CalculoPage() {
     const [mes, setMes] = useState(now.getMonth() + 1);
     const [ano, setAno] = useState(now.getFullYear());
     const [loading, setLoading] = useState(false);
-    const [resultado, setResultado] = useState<{ professores: ResultadoProfessor[] } | null>(null);
+    const [resultado, setResultado] = useState<{
+        professores: ResultadoProfessor[];
+        atualizacoes?: { grade: string | null; presenca: string | null };
+    } | null>(null);
     const [erro, setErro] = useState("");
     const [toast, setToast] = useState("");
     const [horariosOcultos, setHorariosOcultos] = useState<Set<string>>(new Set());
@@ -1159,6 +1173,12 @@ export default function CalculoPage() {
                         </button>
                     </div>
                 </div>
+                {resultado?.atualizacoes && (
+                    <div style={{ marginTop: 12, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, color: "var(--text-muted)" }}>
+                        <span>Grade atualizada em: <strong style={{ color: "var(--text)" }}>{fmtDataHora(resultado.atualizacoes.grade)}</strong></span>
+                        <span>Presença atualizada em: <strong style={{ color: "var(--text)" }}>{fmtDataHora(resultado.atualizacoes.presenca)}</strong></span>
+                    </div>
+                )}
             </div>
 
             {/* Erro */}

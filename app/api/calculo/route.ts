@@ -97,6 +97,14 @@ export async function GET(req: NextRequest) {
             where: { idAtividadeSessao: { in: allSessionIds } }
         });
 
+        // Data da última atualização da presença: enrollment mais recente do mês.
+        let presencaAtualizadaEm: Date | null = null;
+        for (const e of enrollmentsDb) {
+            if (!presencaAtualizadaEm || e.atualizadoEm > presencaAtualizadaEm) {
+                presencaAtualizadaEm = e.atualizadoEm;
+            }
+        }
+
         for (const e of enrollmentsDb) {
             if (!sessionEnrollmentsCache.has(e.idAtividadeSessao)) {
                 sessionEnrollmentsCache.set(e.idAtividadeSessao, []);
@@ -807,7 +815,15 @@ export async function GET(req: NextRequest) {
 
         resultado.sort((a, b) => a.nomeProfessor.localeCompare(b.nomeProfessor));
 
-        return NextResponse.json({ mes, ano, professores: resultado });
+        return NextResponse.json({
+            mes,
+            ano,
+            professores: resultado,
+            atualizacoes: {
+                grade: cachedSchedule?.atualizadoEm ?? null,
+                presenca: presencaAtualizadaEm,
+            },
+        });
     } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Erro desconhecido";
         return NextResponse.json({ error: msg }, { status: 500 });
