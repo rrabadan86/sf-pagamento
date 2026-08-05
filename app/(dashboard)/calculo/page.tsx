@@ -1,5 +1,5 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 interface AlunaCalculo {
     idMember: number;
@@ -781,6 +781,7 @@ export default function CalculoPage() {
         professores: ResultadoProfessor[];
         atualizacoes?: { grade: string | null; presenca: string | null };
     } | null>(null);
+    const [statusAtualizacao, setStatusAtualizacao] = useState<{ grade: string | null; presenca: string | null } | null>(null);
     const [erro, setErro] = useState("");
     const [toast, setToast] = useState("");
     const [horariosOcultos, setHorariosOcultos] = useState<Set<string>>(new Set());
@@ -790,6 +791,20 @@ export default function CalculoPage() {
         setToast(msg);
         setTimeout(() => setToast(""), 3000);
     };
+
+    // Carrega a info de "última atualização" ao abrir e ao trocar mês/ano.
+    useEffect(() => {
+        let cancelado = false;
+        (async () => {
+            try {
+                const res = await fetch(`/api/calculo/status?mes=${mes}&ano=${ano}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!cancelado) setStatusAtualizacao({ grade: data.grade ?? null, presenca: data.presenca ?? null });
+            } catch { /* silencioso */ }
+        })();
+        return () => { cancelado = true; };
+    }, [mes, ano]);
 
     // Modal de Exclusão Interativa
     const [modalExclusao, setModalExclusao] = useState<{
@@ -982,6 +997,7 @@ export default function CalculoPage() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error ?? "Erro ao calcular");
             setResultado(data);
+            if (data.atualizacoes) setStatusAtualizacao(data.atualizacoes);
         } catch (e: unknown) {
             setErro((e as Error).message);
         } finally {
@@ -1173,12 +1189,10 @@ export default function CalculoPage() {
                         </button>
                     </div>
                 </div>
-                {resultado?.atualizacoes && (
-                    <div style={{ marginTop: 12, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, color: "var(--text-muted)" }}>
-                        <span>Grade atualizada em: <strong style={{ color: "var(--text)" }}>{fmtDataHora(resultado.atualizacoes.grade)}</strong></span>
-                        <span>Presença atualizada em: <strong style={{ color: "var(--text)" }}>{fmtDataHora(resultado.atualizacoes.presenca)}</strong></span>
-                    </div>
-                )}
+                <div style={{ marginTop: 12, display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, color: "var(--text-muted)" }}>
+                    <span>Grade atualizada em: <strong style={{ color: "var(--text)" }}>{fmtDataHora(statusAtualizacao?.grade)}</strong></span>
+                    <span>Presença atualizada em: <strong style={{ color: "var(--text)" }}>{fmtDataHora(statusAtualizacao?.presenca)}</strong></span>
+                </div>
             </div>
 
             {/* Erro */}
