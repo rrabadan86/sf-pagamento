@@ -595,7 +595,17 @@ export async function GET(req: NextRequest) {
                                     freq += parseInt(x.replace(/\D/g, ""));
                                 }
                             }
+                            // Planos que não usam "NX" e sim "GRUPO N" para indicar a
+                            // frequência semanal (ex.: "COPA SLIM 2026 - GRUPO 2" = 2x/sem).
+                            // Sem isso, a frequência não era detectada e o rateio caía no
+                            // total de aulas da turma no mês (~19), achatando o R$/Aula.
+                            if (freq === 0) {
+                                const grupoMatch = nameStr.match(/GRUPO\s*(\d+)/);
+                                if (grupoMatch) freq = parseInt(grupoMatch[1], 10);
+                            }
 
+                            // frequência semanal * semanas no mês (≈ diasNoMes/7).
+                            // Ex.: 2x/sem em mês de 31 dias → round(2 * 31/7) = 9 aulas.
                             if (freq > 0) diasDeTreinoNoMes = Math.round(freq * (diasNoMes / 7));
 
                             contrib = isFixoEmReposicao ? 0 : contribuicaoFixa(valorMes, percentual, diasDeTreinoNoMes);
