@@ -21,16 +21,15 @@ function computeValorMes(m: any): { valorMes: number; via: string } {
 
     if (explicitMonths > 0) return { valorMes: saleValue / explicitMonths, via: `keyword/${explicitMonths}` };
 
-    const rec = m.receivables?.find((r: any) => !r.canceled && r.totalInstallments > 1);
     let durMonths = 0;
     if (start && end) {
         const s = new Date(start), e = new Date(end);
-        durMonths = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
-        if (durMonths <= 0) durMonths = 1;
+        durMonths = Math.round(((e.getTime() - s.getTime()) / 86_400_000) / 30.44);
     }
-    if (rec && rec.totalInstallments > 1 && rec.totalInstallments <= 24) return { valorMes: saleValue / rec.totalInstallments, via: `receivables/${rec.totalInstallments}` };
-    if (durMonths > 1 && durMonths <= 24) return { valorMes: saleValue / durMonths, via: `duracao/${durMonths}` };
+    const rec = m.receivables?.find((r: any) => !r.canceled && r.totalInstallments > 1);
+    if (durMonths >= 2 && durMonths <= 24) return { valorMes: saleValue / durMonths, via: `duracao/${durMonths}` };
     if (durMonths === 1) return { valorMes: saleValue, via: "mensal" };
+    if (rec && rec.totalInstallments > 1 && rec.totalInstallments <= 24) return { valorMes: saleValue / rec.totalInstallments, via: `receivables/${rec.totalInstallments}` };
     if (start) {
         const sy = new Date(start).getFullYear();
         const sm = new Date(start).getMonth();

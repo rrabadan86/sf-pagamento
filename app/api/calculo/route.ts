@@ -513,30 +513,32 @@ export async function GET(req: NextRequest) {
                         } else {
                             // Sem palavra-chave de duração no nome: derivar o nº de meses do
                             // próprio contrato, na ordem de confiabilidade:
-                            //   1) parcelamento real (receivables.totalInstallments);
-                            //   2) duração início→fim;
+                            //   1) DURAÇÃO real início→fim (em dias / 30.44) — é o tamanho do
+                            //      plano, o mais confiável;
+                            //   2) parcelamento (receivables) — só se não houver data fim;
                             //   3) contrato aberto (sem fim) 2026+ → anual (/12).
-                            // Antes, TODO contrato 2026+ era dividido por 12 — o que quebrava
-                            // planos curtos como "COPA SLIM 2026" (3 meses, R$1242 → deveria ser
-                            // R$414/mês, mas virava R$103/mês).
-                            const rec = m.receivables?.find((r) => !r.canceled && r.totalInstallments > 1);
+                            // A duração vem em DIAS (não diferença de meses-calendário, que dava
+                            // 2 ou 3 dependendo do dia). E é preferida ao parcelamento porque o
+                            // nº de parcelas do cartão (ex.: COPA pago em 2x) NÃO é a duração do
+                            // plano (3 meses). Antes, TODO contrato 2026+ era dividido por 12.
                             let durMonths = 0;
                             if (m.membershipStart && m.membershipEnd) {
                                 const s = new Date(m.membershipStart);
                                 const e = new Date(m.membershipEnd);
-                                durMonths = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth());
-                                if (durMonths <= 0) durMonths = 1;
+                                const dias = (e.getTime() - s.getTime()) / 86_400_000;
+                                durMonths = Math.round(dias / 30.44);
                             }
+                            const rec = m.receivables?.find((r) => !r.canceled && r.totalInstallments > 1);
 
-                            if (rec && rec.totalInstallments > 1 && rec.totalInstallments <= 24) {
-                                valorMes = m.saleValue / rec.totalInstallments;
-                            } else if (durMonths > 1 && durMonths <= 24) {
+                            if (durMonths >= 2 && durMonths <= 24) {
                                 valorMes = m.saleValue / durMonths;
                             } else if (durMonths === 1) {
                                 // plano de ~1 mês: valor mensal = valor cheio
                                 valorMes = m.saleValue;
+                            } else if (rec && rec.totalInstallments > 1 && rec.totalInstallments <= 24) {
+                                valorMes = m.saleValue / rec.totalInstallments;
                             } else if (m.membershipStart) {
-                                // sem data fim (contrato aberto): assume anual recorrente 2026+
+                                // sem data fim confiável (contrato aberto): assume anual recorrente 2026+
                                 const sy = new Date(m.membershipStart).getFullYear();
                                 const sm = new Date(m.membershipStart).getMonth();
                                 if (sy >= 2026 || (sy === 2025 && sm >= 6)) valorMes = m.saleValue / 12;
