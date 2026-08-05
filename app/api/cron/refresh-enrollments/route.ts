@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { getSchedule } from "@/lib/evo/queries";
 import { getTurmaEnrollments } from "@/lib/evo/enrollments";
@@ -17,8 +18,11 @@ export async function GET(request: NextRequest) {
     const secretParam = request.nextUrl.searchParams.get("secret");
     const cronSecret = process.env.CRON_SECRET;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && secretParam !== cronSecret) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Autoriza o cron (secret) ou um usuário logado (botão na tela do cálculo).
+    const secretOk = !cronSecret || authHeader === `Bearer ${cronSecret}` || secretParam === cronSecret;
+    if (!secretOk) {
+        const session = await getServerSession();
+        if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const agora = new Date();

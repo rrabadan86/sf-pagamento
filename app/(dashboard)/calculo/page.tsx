@@ -975,6 +975,34 @@ export default function CalculoPage() {
         }
     };
 
+    // Atualiza o cache da grade/presença no banco (a partir do EVO) e recalcula.
+    // Use após alterar horários/professoras (grade) ou matrículas/presenças no EVO.
+    const [atualizando, setAtualizando] = useState<null | "grade" | "presenca">(null);
+    const atualizarDados = async (tipo: "grade" | "presenca") => {
+        setAtualizando(tipo);
+        setErro("");
+        try {
+            const endpoint = tipo === "grade" ? "refresh-schedule" : "refresh-enrollments";
+            const res = await fetch(`/api/cron/${endpoint}?mes=${mes}&ano=${ano}`);
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                throw new Error(
+                    res.status === 504
+                        ? "O servidor demorou demais (timeout). Tente novamente em alguns segundos."
+                        : `Erro inesperado do servidor (HTTP ${res.status}).`
+                );
+            }
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error ?? "Erro ao atualizar");
+            showToast(tipo === "grade" ? "Grade atualizada a partir do EVO." : "Presenças atualizadas a partir do EVO.");
+            await calcular();
+        } catch (e: unknown) {
+            setErro((e as Error).message);
+        } finally {
+            setAtualizando(null);
+        }
+    };
+
     const gerarPDF = useCallback(async (prof: ResultadoProfessor) => {
         try {
             // Registrar status Gerado
@@ -1106,6 +1134,28 @@ export default function CalculoPage() {
                                     Calcular {MESES[mes - 1]} {ano}
                                 </>
                             )}
+                        </button>
+                    </div>
+                    <div style={{ flex: "0 0 auto", marginTop: 18, display: "flex", gap: 8 }}>
+                        <button
+                            className="btn btn-outline"
+                            onClick={() => atualizarDados("grade")}
+                            disabled={loading || atualizando !== null}
+                            title="Recarrega a grade de aulas do EVO (use após alterar horário/professora/turma)"
+                        >
+                            {atualizando === "grade"
+                                ? <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Atualizando…</>
+                                : <>↻ Atualizar grade</>}
+                        </button>
+                        <button
+                            className="btn btn-outline"
+                            onClick={() => atualizarDados("presenca")}
+                            disabled={loading || atualizando !== null}
+                            title="Recarrega as presenças/matrículas do EVO (use após alterar alunas nas aulas)"
+                        >
+                            {atualizando === "presenca"
+                                ? <><div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Atualizando…</>
+                                : <>↻ Atualizar presença</>}
                         </button>
                     </div>
                 </div>

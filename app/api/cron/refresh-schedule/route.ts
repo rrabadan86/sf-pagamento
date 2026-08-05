@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { getSchedule } from "@/lib/evo/queries";
 
@@ -8,13 +9,16 @@ export const dynamic = "force-dynamic";
 // Endpoint leve: apenas recacheia a grade de aulas (schedule) do mês.
 // Use quando alterar professoras ou horários no EVO e precisar refletir imediatamente.
 // GET /api/cron/refresh-schedule?secret=...&mes=6&ano=2026
+// Autoriza tanto o cron (secret) quanto um usuário logado (botão na tela do cálculo).
 export async function GET(request: NextRequest) {
     const authHeader = request.headers.get("authorization");
     const secretParam = request.nextUrl.searchParams.get("secret");
     const cronSecret = process.env.CRON_SECRET;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && secretParam !== cronSecret) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const secretOk = !cronSecret || authHeader === `Bearer ${cronSecret}` || secretParam === cronSecret;
+    if (!secretOk) {
+        const session = await getServerSession();
+        if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const agora = new Date();
