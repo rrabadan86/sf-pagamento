@@ -190,9 +190,68 @@ export async function GET(req: NextRequest) {
             : new Map<number, EvoMemberMembership[]>();
         console.log(`[Cálculo] Pré-carregados contratos de ${fallbackContractsMap.size} alunos via fallback.`);
 
+        // Buscar a GRADE REAL na EVO para membros FIXO que aparecem no mês mas ainda
+        // NÃO têm grade no banco local. Isso acontece com alunas matriculadas ou
+        // remanejadas ENTRE as sincronizações de grade (que só rodam nos dias 1 e 25,
+        // com corte de tempo que deixa uma "cauda" sem grade). Confirmado nos dados
+        // reais: o endpoint member-enrollment RETORNA a grade fixa (Ter/Qui etc.)
+        // dessas alunas — a mesma fonte do sync. Sem esta busca, elas caíam na
+        // inferência por presença e eram grudadas em turmas de reposição (ex.: aluna
+        // de Ter/Qui aparecendo na Sexta onde só fez reposição).
+        {
+            const candidatos = new Set<number>();
+            for (const enrollments of sessionEnrollmentsCache.values()) {
+                for (const e of enrollments) {
+                    if (!e.idMember || alunosComGradeNoBanco.has(e.idMember)) continue;
+                    candidatos.add(e.idMember);
+                }
+            }
+            const idsParaGrade = Array.from(candidatos).filter((idMember) => {
+                const contratos = [
+                    ...(membershipsMap.get(idMember) ?? []),
+                    ...(fallbackContractsMap.get(idMember) ?? []),
+                ];
+                return contratos.some((c) => tipoDePlano(c.nameMembership) === "fixo");
+            });
+
+            const GRADE_FETCH_DEADLINE_MS = 90_000;
+            const gradeT0 = Date.now();
+            const CONC = 12;
+            let buscadas = 0;
+            for (let i = 0; i < idsParaGrade.length; i += CONC) {
+                if (Date.now() - gradeT0 > GRADE_FETCH_DEADLINE_MS) break;
+                const lote = idsParaGrade.slice(i, i + CONC);
+                const resultados = await Promise.all(lote.map(async (idMember) => {
+                    try {
+                        return { idMember, grades: await getMemberFixedSchedules(idMember) };
+                    } catch {
+                        return { idMember, grades: [] as EvoFixedSchedule[] };
+                    }
+                }));
+                for (const { idMember, grades } of resultados) {
+                    const validas = grades.filter((g) => g.idActivity && g.weekDay != null && g.startTime && g.startDate);
+                    if (validas.length === 0) continue;
+                    matriculasFixasGlobal.set(idMember, validas.map((g) => ({
+                        idActivity: g.idActivity,
+                        activityName: g.activityName,
+                        weekDay: g.weekDay,
+                        startTime: g.startTime,
+                        status: g.status,
+                        startDate: g.startDate,
+                        endDate: g.endDate ?? null,
+                    })));
+                    // Passa a ser tratada como aluna COM grade (autoritativa) — o que a
+                    // remove automaticamente da inferência por presença logo abaixo.
+                    alunosComGradeNoBanco.add(idMember);
+                    buscadas++;
+                }
+            }
+            console.log(`[Cálculo] Grade real buscada na EVO para ${buscadas} de ${idsParaGrade.length} membros FIXO sem grade local.`);
+        }
+
         // Inferir turmas MATRICULADAS para membros FIXO sem grade (planos RECORRENTE).
-        // O endpoint /member-enrollment da EVO não retorna grade para esses planos e
-        // a flag "replacement" vem sempre false — não dá para distinguir reposição por ela.
+        // Fallback APENAS para quem o member-enrollment não retornou grade alguma.
+        // A flag "replacement" vem sempre false — não dá para distinguir reposição por ela.
         //
         // Critério (validado nos dados reais): uma aluna fixa aparece na lista da sua
         // turma matriculada TODA semana (presente, ausente ou justificada), acumulando
