@@ -494,7 +494,7 @@ export async function GET(req: NextRequest) {
                             }
                         }
 
-                        const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo", "amanda ferreira de castro"];
+                        const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo", "amanda ferreira de castro", "lorena dos santos silva amorim"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
                         const isVipZero = ALUNAS_VIP_ZERO.some(exc => nomeAluna.includes(exc));
 
