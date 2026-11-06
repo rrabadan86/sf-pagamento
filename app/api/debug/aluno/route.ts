@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
                 nameMembership: c.nameMembership, saleValue: c.saleValue,
                 membershipStart: c.membershipStart, membershipEnd: c.membershipEnd,
                 cancelDate: c.cancelDate,
-                receivables: (c.receivables || []).map((r: any) => ({ desc: r.description, canceled: r.canceled, tot: r.totalInstallments })),
+                receivables: (c.receivables || []).map((r: any) => ({ desc: r.description, canceled: r.canceled, tot: r.totalInstallments, ammount: r.ammount, paid: r.ammountPaid, due: r.dueDate, reg: r.registrationDate, recv: r.receivingDate, tipo: r.paymentType?.name })),
                 _valorMes: computeValorMes(c),
             })) : evoContratos,
         });
