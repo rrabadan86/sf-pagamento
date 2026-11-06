@@ -333,9 +333,7 @@ export function temPagamentoNoMes(
     const doMes = validos.filter((r: any) => ym(r.dueDate) === ref);
     if (doMes.length > 0) return doMes.some(pago);
 
-    // 2) Nenhuma parcela vence no mês (plano pago à vista/adiantado): o mês está
-    //    coberto se houve pagamento até o mês e não há parcela vencida em aberto.
-    const ateMes = validos.filter((r: any) => { const v = ym(r.dueDate); return v != null && v <= ref; });
-    if (ateMes.length === 0) return false;
-    return ateMes.some(pago) && ateMes.every(pago);
+    // 2) Nenhuma parcela com vencimento no mês de referência → mês NÃO pago.
+    //    (ex.: COPA de 3 parcelas jul/ago/set não tem pagamento em outubro)
+    return false;
 }
