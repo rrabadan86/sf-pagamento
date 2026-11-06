@@ -312,21 +312,30 @@ export function temPagamentoNoMes(
     mes: number,
     ano: number
 ): boolean | null {
-    // null = sem dados de recebíveis (não dá para afirmar nada)
+    // Regra por COMPETÊNCIA: o mês de referência está pago?
+    // null = sem dados de recebíveis do contrato vigente.
     if (!receivables || receivables.length === 0) return null;
-    const noMes = (d?: string | null) => {
-        if (!d) return false;
+    const validos = receivables.filter((r: any) =>
+        !r.canceled &&
+        Number(r.ammount) > 0 &&
+        (r.paymentType?.name || "") !== "SaldoDevedor"
+    );
+    if (validos.length === 0) return null;
+    const pago = (r: any) => Number(r.ammountPaid) > 0 || !!r.receivingDate;
+    const ym = (d?: string | null) => {
+        if (!d) return null;
         const [y, m] = d.substring(0, 7).split("-").map(Number);
-        return y === ano && m === mes;
+        return y * 12 + (m - 1);
     };
-    return receivables.some((r: any) => {
-        if (r.canceled) return false;
-        if (!(Number(r.ammount) > 0)) return false; // ignora "Saldo Devedor" de R$0
-        if ((r.paymentType?.name || "") === "SaldoDevedor") return false;
-        const pago = Number(r.ammountPaid) > 0 || !!r.receivingDate;
-        if (!pago) return false;
-        // Boleto/PIX: data de recebimento. Cartão liquida em D+30, então considera
-        // também a data de registro/vencimento da cobrança.
-        return noMes(r.receivingDate) || noMes(r.registrationDate) || noMes(r.dueDate);
-    });
+    const ref = ano * 12 + (mes - 1);
+
+    // 1) Parcela(s) com vencimento no mês de referência: pago se alguma foi paga.
+    const doMes = validos.filter((r: any) => ym(r.dueDate) === ref);
+    if (doMes.length > 0) return doMes.some(pago);
+
+    // 2) Nenhuma parcela vence no mês (plano pago à vista/adiantado): o mês está
+    //    coberto se houve pagamento até o mês e não há parcela vencida em aberto.
+    const ateMes = validos.filter((r: any) => { const v = ym(r.dueDate); return v != null && v <= ref; });
+    if (ateMes.length === 0) return false;
+    return ateMes.some(pago) && ateMes.every(pago);
 }

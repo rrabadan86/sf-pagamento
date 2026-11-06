@@ -253,10 +253,9 @@ export async function GET(req: NextRequest) {
         // Recebíveis (pagamentos) por aluna — para identificar quem NÃO pagou no mês.
         // O bulk da EVO já traz os recebíveis; contratos vindos do banco local não.
         // Para alunas FIXO sem recebíveis no bulk, busca individualmente na EVO.
-        const recebiveisPorMembro = new Map<number, any[]>();
+        const contratosComRecebiveis = new Map<number, EvoMemberMembership[]>();
         for (const [id, cs] of membershipsMap.entries()) {
-            const recs = cs.flatMap((c) => c.receivables ?? []);
-            if (recs.length > 0) recebiveisPorMembro.set(id, recs);
+            if (cs.some((c) => (c.receivables ?? []).length > 0)) contratosComRecebiveis.set(id, cs);
         }
         {
             const candidatos = new Set<number>();
@@ -265,7 +264,7 @@ export async function GET(req: NextRequest) {
             }
             for (const id of matriculasFixasGlobal.keys()) candidatos.add(id);
             const ids = Array.from(candidatos).filter((id) => {
-                if (recebiveisPorMembro.has(id)) return false;
+                if (contratosComRecebiveis.has(id)) return false;
                 const contratos = [...(membershipsMap.get(id) ?? []), ...(fallbackContractsMap.get(id) ?? [])];
                 return contratos.some((c) => tipoDePlano(c.nameMembership) === "fixo");
             });
@@ -277,12 +276,12 @@ export async function GET(req: NextRequest) {
                 const res = await Promise.all(lote.map(async (idMember) => {
                     try {
                         const cs = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", { idMember, take: 50 });
-                        return { idMember, recs: cs.flatMap((c) => c.receivables ?? []) };
+                        return { idMember, cs };
                     } catch {
-                        return { idMember, recs: [] as any[] };
+                        return { idMember, cs: [] as EvoMemberMembership[] };
                     }
                 }));
-                for (const { idMember, recs } of res) if (recs.length > 0) recebiveisPorMembro.set(idMember, recs);
+                for (const { idMember, cs } of res) if (cs.length > 0) contratosComRecebiveis.set(idMember, cs);
             }
             console.log(`[Cálculo] Recebíveis buscados na EVO para ${ids.length} alunas FIXO.`);
         }
@@ -531,6 +530,10 @@ export async function GET(req: NextRequest) {
                                 continue;
                             }
                         }
+
+                        // Sem NENHUM contrato vigente no mês de referência (ex.: contrato
+                        // encerrado em maio) → não é aluna deste mês; não entra na listagem.
+                        if (!memberContracts.some(contratoVigenteNoMes)) continue;
 
                         const ALUNAS_VIP_ZERO = ["juliana quintiliano", "paula vanessa carmo", "amanda ferreira de castro", "lorena dos santos silva amorim"];
                         const nomeAluna = (memberContracts[0]?.name || "").toLowerCase();
@@ -789,7 +792,7 @@ export async function GET(req: NextRequest) {
                             statusContrato: finalStatus as any,
                             nomeContrato: m.nameMembership || "Sem Nome",
                             mensalidade: valorMes,
-                            pagouNoMes: temPagamentoNoMes(recebiveisPorMembro.get(m.idMember), mes, ano),
+                            pagouNoMes: temPagamentoNoMes((contratosComRecebiveis.get(m.idMember) ?? []).filter(contratoVigenteNoMes).flatMap((c) => c.receivables ?? []), mes, ano),
                             contribuicaoPorAula: contrib,
                             dataFimContrato: m.membershipEnd || null,
                             diasContratados: diasContratados.length > 0 ? diasContratados : undefined,
