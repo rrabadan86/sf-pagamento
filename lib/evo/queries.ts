@@ -330,7 +330,19 @@ export function temPagamentoNoMes(
     const ref = ano * 12 + (mes - 1);
 
     // 1) Parcela(s) com vencimento no mês de referência: pago se alguma foi paga.
-    const doMes = validos.filter((r: any) => ym(r.dueDate) === ref);
+    // Cartão: a EVO grava em dueDate a data de LIQUIDAÇÃO (~D+30), não a da
+    // cobrança. Ex.: cobrança 07/09 → dueDate 07/10. Então a competência do
+    // cartão é o mês ANTERIOR ao dueDate. Boleto/PIX: dueDate = competência.
+    const ehCartao = (r: any) => {
+        const t = (r.paymentType?.name || "").toLowerCase();
+        return t === "cartaocredito" || t === "transacaoonline" || (r.description || "").toLowerCase().startsWith("cartão");
+    };
+    const competencia = (r: any) => {
+        const v = ym(r.dueDate);
+        if (v == null) return null;
+        return ehCartao(r) ? v - 1 : v;
+    };
+    const doMes = validos.filter((r: any) => competencia(r) === ref);
     if (doMes.length > 0) return doMes.some(pago);
 
     // 2) Nenhuma parcela com vencimento no mês de referência → mês NÃO pago.
