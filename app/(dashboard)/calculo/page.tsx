@@ -738,6 +738,8 @@ function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: Resul
             <h3 style={{ marginBottom: 8 }}>Gestão Central: Alunas do Mês</h3>
             <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Lista contendo absolutamente todas as alunas que compuseram o cálculo unificado. A exclusão de uma aluna neste painel atua <strong style={{ color: "var(--red)" }}>globalmente</strong> cortando a matrícula de todas as professoras instantaneamente.</p>
             <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 13 }}>
+                <span className="badge badge-blue">{todas.length} alunas no total</span>
+                {soSemPagamento && <span className="badge badge-gray">{alunasSorted.length} exibidas</span>}
                 <span className="badge badge-red">{semPagamento.length} sem pagamento no mês</span>
                 {semDados.length > 0 && <span className="badge badge-yellow">{semDados.length} sem dados de pagamento</span>}
                 <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
