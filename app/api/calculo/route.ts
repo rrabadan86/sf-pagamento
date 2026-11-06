@@ -153,12 +153,22 @@ export async function GET(req: NextRequest) {
         // Vigência no mês de referência: contrato ativo em qualquer dia do mês.
         const primeiroDiaMesRef = new Date(ano, mes - 1, 1);
         const ultimoDiaMesRef = new Date(ano, mes, 0, 23, 59, 59);
+        // Cancelamentos conhecidos pela EVO (id do contrato → data). Contrato
+        // rescindido mantém a data de fim ORIGINAL e só ganha cancelDate; além disso
+        // o banco local pode continuar "active". Preenchido mais abaixo com os
+        // contratos buscados na EVO.
+        const cancelamentoPorContrato = new Map<string, string>();
+        const idContrato = (c: EvoMemberMembership) =>
+            String((c as any).idMemberMemberShip ?? c.idMemberMembership ?? "");
         const contratoVigenteNoMes = (c: EvoMemberMembership) => {
             const ini = c.membershipStart ? new Date(c.membershipStart) : null;
             const fim = c.membershipEnd ? new Date(c.membershipEnd) : null;
             if (!ini) return false;
             if (ini > ultimoDiaMesRef) return false;
             if (fim && fim < primeiroDiaMesRef) return false;
+            // Rescisão: o contrato termina na data de cancelamento.
+            const cancel = c.cancelDate || cancelamentoPorContrato.get(idContrato(c));
+            if (cancel && new Date(cancel) < primeiroDiaMesRef) return false;
             return true;
         };
 
@@ -284,6 +294,12 @@ export async function GET(req: NextRequest) {
                 for (const { idMember, cs } of res) if (cs.length > 0) contratosComRecebiveis.set(idMember, cs);
             }
             console.log(`[Cálculo] Recebíveis buscados na EVO para ${ids.length} alunas FIXO.`);
+        }
+        for (const cs of contratosComRecebiveis.values()) {
+            for (const c of cs) {
+                const id = idContrato(c);
+                if (id && c.cancelDate) cancelamentoPorContrato.set(id, c.cancelDate);
+            }
         }
 
         // Inferir turmas MATRICULADAS para membros FIXO sem grade (planos RECORRENTE).
