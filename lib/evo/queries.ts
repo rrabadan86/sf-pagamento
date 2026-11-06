@@ -308,12 +308,25 @@ export function statusContrato(
  * passaremos a considerar true por padrão, focando apenas no cálculo do professor.
  */
 export function temPagamentoNoMes(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    m: EvoMemberMembership,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    receivables: EvoReceivable[] | null | undefined,
     mes: number,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     ano: number
-): boolean {
-    return true; 
+): boolean | null {
+    // null = sem dados de recebíveis (não dá para afirmar nada)
+    if (!receivables || receivables.length === 0) return null;
+    const noMes = (d?: string | null) => {
+        if (!d) return false;
+        const [y, m] = d.substring(0, 7).split("-").map(Number);
+        return y === ano && m === mes;
+    };
+    return receivables.some((r: any) => {
+        if (r.canceled) return false;
+        if (!(Number(r.ammount) > 0)) return false; // ignora "Saldo Devedor" de R$0
+        if ((r.paymentType?.name || "") === "SaldoDevedor") return false;
+        const pago = Number(r.ammountPaid) > 0 || !!r.receivingDate;
+        if (!pago) return false;
+        // Boleto/PIX: data de recebimento. Cartão liquida em D+30, então considera
+        // também a data de registro/vencimento da cobrança.
+        return noMes(r.receivingDate) || noMes(r.registrationDate) || noMes(r.dueDate);
+    });
 }

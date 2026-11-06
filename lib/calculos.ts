@@ -16,7 +16,7 @@ export interface AlunaCalculo {
     statusContrato: "Ativo" | "Suspenso" | "Cancelado";
     nomeContrato: string;
     mensalidade: number; // 0 para free
-    pagouNoMes: boolean;
+    pagouNoMes: boolean | null;
     contribuicaoPorAula: number; // calculado
     dataFimContrato: string | null;
     diasContratados?: string[]; // dias fixos do contrato ex: ["Segunda 05h45", "Quarta 05h45"]

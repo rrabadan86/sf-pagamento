@@ -8,7 +8,7 @@ interface AlunaCalculo {
     statusContrato: "Ativo" | "Suspenso" | "Cancelado";
     nomeContrato: string;
     mensalidade: number;
-    pagouNoMes: boolean;
+    pagouNoMes: boolean | null;
     contribuicaoPorAula: number;
     dataFimContrato: string | null;
     diasContratados?: string[];
@@ -145,8 +145,8 @@ function SessaoCard({ dia, profId, turma, onExcluirAluna, onInserirAluna, allAlu
                                             <td style={{ color: "var(--text-muted)" }}>{a.tipo === "fixo" ? fmt(a.mensalidade) : "—"}</td>
                                             <td>
                                                 {a.tipo === "fixo"
-                                                    ? <span className={a.pagouNoMes ? "badge badge-green" : "badge badge-gray"}>
-                                                        {a.pagouNoMes ? "Sim" : "Não"}
+                                                    ? <span className={a.pagouNoMes === true ? "badge badge-green" : a.pagouNoMes === false ? "badge badge-red" : "badge badge-yellow"}>
+                                                        {a.pagouNoMes === true ? "Sim" : a.pagouNoMes === false ? "Não" : "?"}
                                                     </span>
                                                     : <span style={{ color: "var(--text-faint)" }}>—</span>
                                                 }
@@ -696,7 +696,7 @@ function TabelaResumoGrade({ professores, professoresFiltrados, horariosOcultos,
     )
 }
 
-type AlunaGlobal = { idMember: number; nome: string; contrato: string; tipo: string; diasMatriculados: Set<string>; profNames: Set<string> };
+type AlunaGlobal = { idMember: number; nome: string; contrato: string; tipo: string; pagou: boolean | null; diasMatriculados: Set<string>; profNames: Set<string> };
 
 function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: ResultadoProfessor[], onExcluirGlobal: (id: number, nome: string) => void }) {
     const alunasMap = new Map<number, AlunaGlobal>();
@@ -706,7 +706,7 @@ function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: Resul
             t.dias.forEach(d => {
                 d.alunas.forEach(a => {
                     if (!alunasMap.has(a.idMember)) {
-                        alunasMap.set(a.idMember, { idMember: a.idMember, nome: a.nome, contrato: a.nomeContrato, tipo: a.tipo, diasMatriculados: new Set(), profNames: new Set() });
+                        alunasMap.set(a.idMember, { idMember: a.idMember, nome: a.nome, contrato: a.nomeContrato, tipo: a.tipo, pagou: a.tipo === "fixo" ? a.pagouNoMes : true, diasMatriculados: new Set(), profNames: new Set() });
                     }
                     const obj = alunasMap.get(a.idMember)!;
 
@@ -727,12 +727,24 @@ function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: Resul
         });
     });
 
-    const alunasSorted = Array.from(alunasMap.values()).sort((a, b) => a.nome.localeCompare(b.nome));
+    const [soSemPagamento, setSoSemPagamento] = useState(false);
+    const todas = Array.from(alunasMap.values()).sort((a, b) => a.nome.localeCompare(b.nome));
+    const semPagamento = todas.filter(a => a.pagou === false);
+    const semDados = todas.filter(a => a.pagou === null);
+    const alunasSorted = soSemPagamento ? todas.filter(a => a.pagou !== true) : todas;
 
     return (
         <div className="card" style={{ marginTop: 24, padding: 24, paddingBottom: 12 }}>
             <h3 style={{ marginBottom: 8 }}>Gestão Central: Alunas do Mês</h3>
             <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Lista contendo absolutamente todas as alunas que compuseram o cálculo unificado. A exclusão de uma aluna neste painel atua <strong style={{ color: "var(--red)" }}>globalmente</strong> cortando a matrícula de todas as professoras instantaneamente.</p>
+            <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 13 }}>
+                <span className="badge badge-red">{semPagamento.length} sem pagamento no mês</span>
+                {semDados.length > 0 && <span className="badge badge-yellow">{semDados.length} sem dados de pagamento</span>}
+                <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+                    <input type="checkbox" checked={soSemPagamento} onChange={e => setSoSemPagamento(e.target.checked)} />
+                    Mostrar só alunas sem pagamento identificado
+                </label>
+            </div>
             <div style={{ overflowX: "auto" }}>
                 <table className="table" style={{ fontSize: 13 }}>
                     <thead>
@@ -741,6 +753,7 @@ function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: Resul
                             <th>Plano / Contrato</th>
                             <th style={{ textAlign: "center" }}>Dias Avaliados</th>
                             <th>Professoras</th>
+                            <th style={{ textAlign: "center" }}>Pagamento no mês</th>
                             <th style={{ textAlign: "center", width: 60 }}>Excluir</th>
                         </tr>
                     </thead>
@@ -757,6 +770,11 @@ function GridGlobalAlunas({ professores, onExcluirGlobal }: { professores: Resul
                                 <td style={{ textAlign: "center", color: "var(--text-faint)" }}>{Array.from(a.diasMatriculados).join(", ")}</td>
                                 <td style={{ color: "var(--text)" }}>
                                     {Array.from(a.profNames).map(pn => <span key={pn} style={{ display: "inline-block", backgroundColor: "var(--bg-secondary)", border: "1px solid var(--border)", padding: "2px 6px", borderRadius: 4, marginRight: 4, fontSize: 11, fontWeight: 500 }}>{pn}</span>)}
+                                </td>
+                                <td style={{ textAlign: "center" }}>
+                                    {a.pagou === true ? <span className="badge badge-green">Pago</span>
+                                        : a.pagou === false ? <span className="badge badge-red">Sem pagamento</span>
+                                        : <span className="badge badge-yellow" title="A EVO não retornou recebíveis desta aluna">Sem dados</span>}
                                 </td>
                                 <td style={{ textAlign: "center" }}>
                                     <button onClick={() => onExcluirGlobal(a.idMember, a.nome)} title="Excluir de TODAS as turmas do mês" style={{ backgroundColor: "#fef2f2", color: "var(--red)", border: "1px solid #fecaca", borderRadius: 4, cursor: "pointer", padding: "4px 8px", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto" }}>

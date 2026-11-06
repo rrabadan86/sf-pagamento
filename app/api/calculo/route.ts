@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { getSchedule, getMemberMemberships, getMemberMembershipsForIds, EvoSchedule, EvoMemberMembership, statusContrato, temPagamentoNoMes, tipoDePlano } from "@/lib/evo/queries";
+import { evoFetchPaginated } from "@/lib/evo/client";
 import { getTurmaEnrollments, EvoEnrollment, getMemberFixedSchedules, EvoFixedSchedule } from "@/lib/evo/enrollments";
 import { calcularDiaDaSemana, contribuicaoFixa, CONTRIBUICAO_FREE, round2, contarAulasMes, DIAS_SEMANA, AlunaCalculo, ResultadoProfessor, ResultadoTurma, ResultadoDiaDaSemana } from "@/lib/calculos";
 
@@ -247,6 +248,43 @@ export async function GET(req: NextRequest) {
                 }
             }
             console.log(`[Cálculo] Grade real buscada na EVO para ${buscadas} de ${idsParaGrade.length} membros FIXO sem grade local.`);
+        }
+
+        // Recebíveis (pagamentos) por aluna — para identificar quem NÃO pagou no mês.
+        // O bulk da EVO já traz os recebíveis; contratos vindos do banco local não.
+        // Para alunas FIXO sem recebíveis no bulk, busca individualmente na EVO.
+        const recebiveisPorMembro = new Map<number, any[]>();
+        for (const [id, cs] of membershipsMap.entries()) {
+            const recs = cs.flatMap((c) => c.receivables ?? []);
+            if (recs.length > 0) recebiveisPorMembro.set(id, recs);
+        }
+        {
+            const candidatos = new Set<number>();
+            for (const enrollments of sessionEnrollmentsCache.values()) {
+                for (const e of enrollments) if (e.idMember) candidatos.add(e.idMember);
+            }
+            for (const id of matriculasFixasGlobal.keys()) candidatos.add(id);
+            const ids = Array.from(candidatos).filter((id) => {
+                if (recebiveisPorMembro.has(id)) return false;
+                const contratos = [...(membershipsMap.get(id) ?? []), ...(fallbackContractsMap.get(id) ?? [])];
+                return contratos.some((c) => tipoDePlano(c.nameMembership) === "fixo");
+            });
+            const t0rec = Date.now();
+            const CONC = 12;
+            for (let i = 0; i < ids.length; i += CONC) {
+                if (Date.now() - t0rec > 60_000) break;
+                const lote = ids.slice(i, i + CONC);
+                const res = await Promise.all(lote.map(async (idMember) => {
+                    try {
+                        const cs = await evoFetchPaginated<EvoMemberMembership>("/api/v3/membermembership", { idMember, take: 50 });
+                        return { idMember, recs: cs.flatMap((c) => c.receivables ?? []) };
+                    } catch {
+                        return { idMember, recs: [] as any[] };
+                    }
+                }));
+                for (const { idMember, recs } of res) if (recs.length > 0) recebiveisPorMembro.set(idMember, recs);
+            }
+            console.log(`[Cálculo] Recebíveis buscados na EVO para ${ids.length} alunas FIXO.`);
         }
 
         // Inferir turmas MATRICULADAS para membros FIXO sem grade (planos RECORRENTE).
@@ -751,7 +789,7 @@ export async function GET(req: NextRequest) {
                             statusContrato: finalStatus as any,
                             nomeContrato: m.nameMembership || "Sem Nome",
                             mensalidade: valorMes,
-                            pagouNoMes: temPagamentoNoMes(m, mes, ano),
+                            pagouNoMes: temPagamentoNoMes(recebiveisPorMembro.get(m.idMember), mes, ano),
                             contribuicaoPorAula: contrib,
                             dataFimContrato: m.membershipEnd || null,
                             diasContratados: diasContratados.length > 0 ? diasContratados : undefined,

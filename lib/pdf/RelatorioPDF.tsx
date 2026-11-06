@@ -64,7 +64,7 @@ interface AlunaCalculo {
     statusContrato: "Ativo" | "Suspenso" | "Cancelado";
     nomeContrato: string;
     mensalidade: number;
-    pagouNoMes: boolean;
+    pagouNoMes: boolean | null;
     contribuicaoPorAula: number;
     dataFimContrato: string | null;
 }
